@@ -1,0 +1,97 @@
+# PHEME（谣言/事件级推文数据）
+# PHEME 结构包含话题树；此方案默认 root-only（仅使用源推文），可切换为 thread。
+
+base: common.yaml
+
+name: pheme
+source:
+  dataset: PHEME
+  homepage: https://figshare.com/articles/dataset/PHEME_dataset_of_rumours_and_non-rumours/4010619
+  paper_ref: community-practice
+
+paths:
+  raw_dir: data/raw/pheme
+  processed_dir: data/processed/pheme
+
+fields:
+  id_col: id
+  text_col: text
+  label_col: label              # rumor | non-rumor（需在 class_map 中重映射）
+  timestamp_col: created_at
+  thread_root_col: root_id      # 话题树根；root-only 模式使用
+  convo_id_col: conversation_id # 线程 ID
+
+preprocess:
+  strip_html: true
+  normalize_whitespace: true
+  remove_urls: true
+  lowercase: true
+  deduplicate_by_text: true
+  max_len: 280                  # 推文短文本；保守设置
+  tokenizer:
+    type: word
+    model_name: null
+    pad_to_max_len: true
+    pad_token_id: 0
+
+mode:
+  conversation: root_only       # root_only | thread
+  thread_aggregate: mean        # 当 conversation=thread 时，如何聚合子回复
+
+split:
+  method: temporal              # 以时间切分以减少信息泄漏
+  ratios: [0.8, 0.1, 0.1]
+  group_by_id: true
+
+class_map:
+  rumor: 0
+  non-rumor: 1
+  drop_others: true
+
+el:
+  provider: spacy_blink
+  threshold: 0.65               # 短文本实体稀疏，适度放宽
+  max_mentions_per_doc: 16
+  max_candidates: 5
+  cache:
+    dir: .cache/kan/el/pheme
+    overwrite: false
+  rate_limit:
+    rps: 8                       # 多为本地推断，允许更高节流上限
+    burst: 16
+
+kg:
+  provider: wikidata
+  endpoint: https://query.wikidata.org/sparql
+  hop: 1
+  neighbors_k: 10
+  relation_types: ["P31", "P279", "P361", "P527"]
+  retries: 3
+  backoff: 0.5
+  cache:
+    dir: .cache/kan/kg/pheme
+    overwrite: false
+  rate_limit:
+    rps: 3
+    burst: 6
+
+vectorizer:
+  type: glove
+  dim: 100
+  glove:
+    path: embeddings/glove.6B.100d.txt
+    oov_init: uniform
+    oov_range: 0.05
+  normalize: l2
+
+batcher:
+  batch_size: 64
+  num_workers: 4
+  pin_memory: true
+  bucket_by_length: true
+  sortish_sampler: true
+  pad_id: 0
+
+runtime:
+  tqdm: true
+  dry_run: false

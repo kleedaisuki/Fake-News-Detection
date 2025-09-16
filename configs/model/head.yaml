@@ -1,0 +1,24 @@
+# 预测头：接收 p（文本）、q（实体注意力输出）、r（上下文注意力输出）
+# 由 kan.utils.registry 构建：HUB['head']
+
+name: head
+type: concat_classifier_head
+num_labels: 2
+problem_type: single_label_classification   # 真假二分类
+
+use_p: true
+use_q: true
+use_r: true
+fusion: concat              # 与论文一致：拼接 [p; q; r] → 全连接 → softmax
+
+# 若三路维度一致（D=100），可不设投影；需要时可解锁 proj_dim
+proj_dim: null              # 例如设为 100/128/256 以做线性投影
+hidden_sizes: []            # 空列表 → 直接线性层（论文描述为“一层全连接”）
+activation: gelu
+layernorm: false
+bias: true
+
+# 正则与稳定性
+dropout: 0.5                # 头部丢弃（与主干一致，经验上更稳）
+label_smoothing: 0.0
+class_weights: null

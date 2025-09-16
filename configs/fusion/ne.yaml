@@ -1,0 +1,23 @@
+# configs/fusion/ne.yaml
+# News→Entities (NE) attention — KAN fusion stage 1
+# 契约：Q=p(text), K=V=q'(entities); 输出 q（实体加权表示）
+# 注意：d_model 必须与三路编码器输出维度一致（见 configs/model/*_encoder.yaml）
+
+type: ne             # Registry: attention.ne
+name: NEAttention
+
+# —— 模型结构 ——
+d_model: 100         # 对齐论文默认嵌入维度；如使用 BERT 等，请改为对应隐藏维
+n_heads: 4           # 论文使用的多头数
+dropout: 0.5         # 训练期 dropout（与论文一致）；推理期框架会自动关
+use_bias: true       # Q/K/V 线性映射是否使用 bias
+
+# —— 实现细节 / 工程偏好 ——
+impl: sdpa           # 'sdpa' 使用 torch.scaled_dot_product_attention；'dot' 使用手写 QK^T/√d_k
+normalize_qk: true   # 对 Q/K 做层归一/缩放等（由实现解释；保持 true 即可）
+return_weights: false # 需要可解释可视化时置 true（注意显存占用）
+mask_policy: auto     # 'auto'：依据传入 mask；'all_valid'：缺省视为全有效（会有 WARNING 日志）
+
+# —— 日志与数值稳定性（可选）——
+log_level: INFO       # 'DEBUG' 将记录形状、mask 密度等
+eps: 1.0e-6           # 数值稳定性小常数（softmax/归一化等）

@@ -1,0 +1,98 @@
+# 全局默认（被具体数据集 YAML 通过 `base` 或加载顺序继承/覆盖）
+# 目标：统一 I/O 路径、清洗策略、EL/KG/向量化与批处理约定。
+# 与 kan.data 模块的契约：
+# - loaders.py 读取 raw/processed，按 fields.* 提供列；
+# - entity_linking.py 使用 el.*；
+# - kg_fetcher.py 使用 kg.*；
+# - vectorizer.py 使用 vectorizer.*；
+# - batcher.py 使用 batcher.*。
+
+name: common_defaults
+version: 0.1
+seed: 42
+
+paths:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  cache_dir: .cache/kan
+  artifacts_dir: artifacts
+
+fields:
+  id_col: id
+  text_col: text
+  label_col: label
+  timestamp_col: timestamp     # 可选；时间切分时使用
+  entity_col: entities         # EL 后写回的列
+  context_col: contexts        # KG 一跳邻居/上下文列
+
+preprocess:
+  strip_html: true
+  normalize_whitespace: true
+  remove_urls: true
+  lowercase: true
+  deduplicate_by_text: true
+  max_len: 512                 # tokenizer 截断长度（词/子词均可）
+  tokenizer:
+    type: word                 # word | wordpiece | bpe | sentencepiece
+    model_name: null           # 非空则优先使用（如 hf 模型名）
+    pad_to_max_len: true
+    pad_token_id: 0
+
+split:
+  method: random               # random | stratified | temporal
+  ratios: [0.8, 0.1, 0.1]      # train/val/test（若 temporal，忽略此项）
+  group_by_id: false           # 同一新闻/事件分配到同一折
+  folds: null                  # k 折时设置整数
+
+el:  # Entity Linking（命名实体识别+消歧）
+  provider: spacy_blink        # 约定：spacy NER + BLINK/alias rerank；实现可替换
+  threshold: 0.7               # 置信度阈值
+  max_mentions_per_doc: 64
+  max_candidates: 5
+  cache:
+    dir: ${paths.cache_dir}/el
+    overwrite: false
+  rate_limit:
+    rps: 5                     # 每秒请求数上限（若使用在线服务）
+    burst: 10
+
+kg:  # Knowledge Graph 获取（默认用 Wikidata）
+  provider: wikidata
+  endpoint: https://query.wikidata.org/sparql
+  hop: 1                        # 邻接跳数（KAN 论文为一跳）
+  neighbors_k: 10               # 每实体取前 k 个邻居
+  relation_types: ["P31", "P279", "P361", "P527"]  # 示例；实现可扩展
+  retries: 3
+  backoff: 0.5                 # s，指数退避基准
+  cache:
+    dir: ${paths.cache_dir}/kg
+    overwrite: false
+  rate_limit:
+    rps: 2
+    burst: 4
+
+vectorizer:
+  type: glove                  # glove | fasttext | hf | null（纯随机）
+  dim: 100                     # 与模型 D=100 对齐
+  glove:
+    path: embeddings/glove.6B.100d.txt
+    oov_init: uniform
+    oov_range: 0.05
+  normalize: l2
+
+batcher:
+  batch_size: 64
+  num_workers: 4
+  pin_memory: true
+  bucket_by_length: true
+  sortish_sampler: true
+  pad_id: 0
+
+logging:
+  level: INFO
+  file: ${paths.artifacts_dir}/data.log
+  jsonl_audit: ${paths.artifacts_dir}/data_audit.jsonl
+
+runtime:
+  tqdm: true
+  dry_run: false

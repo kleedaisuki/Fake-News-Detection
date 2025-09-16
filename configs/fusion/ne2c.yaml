@@ -1,0 +1,23 @@
+# configs/fusion/ne2c.yaml
+# News→Entities→Contexts (NE2C) attention — KAN fusion stage 2
+# 契约：Q=p(text), K=q'(entities), V=r'(contexts); 输出 r（上下文加权表示）
+
+type: ne2c           # Registry: attention.ne2c
+name: NE2CAttention
+
+# —— 模型结构 ——
+d_model: 100         # 与三路编码器统一；若 encoders 改维度，这里同步修改
+n_heads: 4
+dropout: 0.5
+use_bias: true
+
+# —— 上下文聚合策略 ——
+context_pooling: attn   # 'attn'（默认，论文语义一致）|'mean'|'cls' 等；实现侧按 README 对齐
+impl: sdpa
+normalize_qk: true
+return_weights: false   # 置 true 时同时返回 ne/e2c 两级权重字典
+mask_policy: auto
+
+# —— 日志与数值稳定性（可选）——
+log_level: INFO
+eps: 1.0e-6

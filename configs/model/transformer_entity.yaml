@@ -1,0 +1,29 @@
+# 构建实体编码器（ID 序列 → 序列表征 q' 与池化向量）
+# 由 kan.utils.registry 构建：HUB['entity_encoder']
+
+name: entity_encoder
+type: transformer_entity_id
+seed: 42
+
+# 嵌入表（QID → 向量）
+embedding:
+  vocab_size: null           # 由 batcher 词表预热后注入
+  embedding_dim: 100         # 与 text/context 对齐（D=100）
+  padding_idx: 0
+  pretrained_path: null      # 可选：加载预训练实体向量
+  trainable: true
+
+# 编码器（对 E 维或展平后的序列做编码）
+encoder:
+  xformer_layers: 1
+  xformer_heads: 4
+  ffn_dim: 2048
+  dropout: 0.5
+  activation: gelu
+
+# 聚合策略
+pooling:
+  entity_pooling: mean           # q' → q（对 E 维）
+  context_inner_pooling: mean    # 对每个实体的 Lc 维先聚合（若提供 context_ids）
+
+return_raw_contexts: false

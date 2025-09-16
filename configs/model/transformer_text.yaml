@@ -1,0 +1,26 @@
+# 构建文本编码器（与 KAN 论文对齐：单层 Transformer，d_model=100）
+# 约定：所有模块在注意力层前的隐藏维度 D 必须一致（此处设为 100）
+# 由 kan.utils.registry 构建：HUB['text_encoder']
+
+name: text_encoder
+type: vanilla_transformer_text   # 实现需提供；非 HF，词向量 + 单层 Transformer
+seed: 42
+
+embedding:
+  vocab_size: null           # 由数据/词表在运行时推断
+  embedding_dim: 100         # 与实体/上下文保持一致（D=100）
+  padding_idx: 0
+  pretrained_path: null      # 可选：word2vec 100d 路径；为空则随机初始化
+  trainable: true
+
+encoder:
+  num_layers: 1              # 单层 Transformer（KAN 对齐）
+  n_heads: 4                 # 多头数（KAN 对齐）
+  ffn_dim: 2048              # FFN 维度（KAN 对齐）
+  dropout: 0.5               # 丢弃率（KAN 对齐）
+  activation: gelu
+  layer_norm_eps: 1.0e-5
+  positional_encoding: sinusoidal
+
+pooling: mean                # 序列→向量；与下游 Head 融合
+layer_norm: true

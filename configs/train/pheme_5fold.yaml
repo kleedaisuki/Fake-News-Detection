@@ -1,0 +1,40 @@
+run:
+  run_id: "ph-${now:%Y%m%d-%H%M%S}"
+  output_dir: ".runs/${run_id}"
+  seed: 2025
+  deterministic: true
+  device: "cuda"
+  mixed_precision: "bf16"
+  compile: true
+  log_cfg: null
+
+data:
+  config: "configs/data/pheme.yaml"
+  split:
+    validation_holdout: 0.10
+    kfold: { folds: 5, stratified: true, shuffle: true, seed: 2025 }
+
+model:
+  text_encoder: "configs/model/transformer_text.yaml"
+  entity_encoder: "configs/model/transformer_entity.yaml"
+  context_encoder: "configs/model/transformer_context.yaml"
+  fusion: { ne: "configs/fusion/ne.yaml", ne2c: "configs/fusion/ne2c.yaml" }
+  head: "configs/model/head.yaml"
+
+train:
+  # 类不平衡更明显：维持中等 batch，稍多轮、稍更耐心的早停
+  epochs: 30
+  batch_size: 32
+  grad_accum_steps: 1
+  max_grad_norm: 1.0
+  optimizer: { type: "adam", lr: 3.0e-4, betas: [0.9, 0.999], weight_decay: 1.0e-2 }
+  scheduler: { type: "cosine_with_warmup", warmup_ratio: 0.08 }
+  early_stopping: { metric: "f1_macro", mode: "max", patience: 6 }
+  evaluation:
+    metrics: ["accuracy", "precision_macro", "recall_macro", "f1_macro", "roc_auc_ovr"]
+    eval_on: "epoch"
+    save_top_k: 3
+    monitor: "f1_macro"
+    mode: "max"
+
+dataloader: { num_workers: 4, pin_memory: true, persistent_workers: true }

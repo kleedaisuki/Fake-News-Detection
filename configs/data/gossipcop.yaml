@@ -1,0 +1,91 @@
+# GossipCop（娱乐新闻辟谣数据）
+# 继承 common，覆盖数据源及长度/速率偏好（样本规模更大，适度收紧）
+
+base: common.yaml
+
+name: gossipcop
+source:
+  dataset: GossipCop
+  homepage: https://www.gossipcop.com/
+  paper_ref: KAN-2020
+
+paths:
+  raw_dir: data/raw/gossipcop
+  processed_dir: data/processed/gossipcop
+
+fields:
+  id_col: id
+  text_col: content
+  label_col: label
+  timestamp_col: publish_time
+
+preprocess:
+  strip_html: true
+  normalize_whitespace: true
+  remove_urls: true
+  lowercase: true
+  deduplicate_by_text: true
+  max_len: 400                 # 样本更长更杂；酌情缩短以控算力
+  tokenizer:
+    type: word
+    model_name: null
+    pad_to_max_len: true
+    pad_token_id: 0
+
+split:
+  method: stratified
+  ratios: [0.8, 0.1, 0.1]
+  group_by_id: true
+
+class_map:
+  fake: 0
+  real: 1
+  drop_others: true
+
+el:
+  provider: spacy_blink
+  threshold: 0.72               # 轻微提高阈值以抑制噪声实体
+  max_mentions_per_doc: 64
+  max_candidates: 5
+  cache:
+    dir: .cache/kan/el/gossipcop
+    overwrite: false
+  rate_limit:
+    rps: 6                       # 并发略放宽以加速预处理
+    burst: 12
+
+kg:
+  provider: wikidata
+  endpoint: https://query.wikidata.org/sparql
+  hop: 1
+  neighbors_k: 10
+  relation_types: ["P31", "P279", "P361", "P527"]
+  retries: 3
+  backoff: 0.5
+  cache:
+    dir: .cache/kan/kg/gossipcop
+    overwrite: false
+  rate_limit:
+    rps: 2
+    burst: 4
+
+vectorizer:
+  type: glove
+  dim: 100
+  glove:
+    path: embeddings/glove.6B.100d.txt
+    oov_init: uniform
+    oov_range: 0.05
+  normalize: l2
+
+batcher:
+  batch_size: 64
+  num_workers: 4
+  pin_memory: true
+  bucket_by_length: true
+  sortish_sampler: true
+  pad_id: 0
+
+runtime:
+  tqdm: true
+  dry_run: false
