@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
 """
 @file   kan/data/loaders.py
 @brief  Dataset loaders with stable schema for KAN (Knowledge-aware Attention Network).
@@ -38,7 +39,20 @@ from hashlib import blake2b
 import json
 import logging
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, MutableMapping, Optional, Sequence, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import pandas as pd
 
@@ -56,6 +70,7 @@ LOGGER = logging.getLogger("kan.data.loaders")
 # Stable schema (v1)
 # -----------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class NewsRecord:
     """\
@@ -69,6 +84,7 @@ class NewsRecord:
     @field contexts: 上下文字典（可选）/ Optional mapping entity->neighbors.
     @field meta: 附加元信息（数据来源、原始字段、fold、split 等）/ Free-form metadata.
     """
+
     id: str
     text: str
     label: int
@@ -87,6 +103,7 @@ class Split(str, Enum):
 # Config & Field mapping
 # -----------------------------------------------------------------------------
 
+
 @dataclass
 class FieldMap:
     """\
@@ -95,14 +112,15 @@ class FieldMap:
 
     仅 `id/text/label` 是硬需求，其他字段可缺省。
     """
+
     id: Optional[str] = None
     text: Optional[str] = None
     label: Optional[str] = None
     # Optional fields in source
-    entities: Optional[str] = None             # column that holds List[str]
-    contexts: Optional[str] = None             # column that holds Dict[str, List[str]]
-    split: Optional[str] = None                # column that holds split names
-    fold: Optional[str] = None                 # column that holds fold indices
+    entities: Optional[str] = None  # column that holds List[str]
+    contexts: Optional[str] = None  # column that holds Dict[str, List[str]]
+    split: Optional[str] = None  # column that holds split names
+    fold: Optional[str] = None  # column that holds fold indices
     meta: Optional[Union[str, List[str]]] = None  # column(s) to pack into meta
 
 
@@ -112,12 +130,13 @@ class DatasetConfig:
     @zh 数据集加载配置；与 `configs/data/*.yaml` 对齐。
     @en Dataset loading config; aligned with configs/data/*.yaml.
     """
+
     name: str
     format: str  # "csv" | "jsonl" | "hf"
     # Source location
-    path: Optional[Union[str, Path]] = None            # file path or directory
-    hf_name: Optional[str] = None                      # huggingface dataset name
-    hf_config: Optional[str] = None                    # huggingface config/subset
+    path: Optional[Union[str, Path]] = None  # file path or directory
+    hf_name: Optional[str] = None  # huggingface dataset name
+    hf_config: Optional[str] = None  # huggingface config/subset
     # Split specification
     splits: Mapping[str, Union[str, Path]] | None = None  # {split: file_or_hf_split}
     # CSV/JSONL options
@@ -139,19 +158,24 @@ class DatasetConfig:
 # -----------------------------------------------------------------------------
 try:
     from kan.utils.registry import HUB
+
     _DATASET_REG = HUB.get_or_create("dataset")
 except Exception:  # pragma: no cover - registry optional at import time
+
     class _DummyReg:
         def register(self, *_a, **_k):
             def deco(x):
                 return x
+
             return deco
+
     _DATASET_REG = _DummyReg()  # type: ignore
 
 
 # -----------------------------------------------------------------------------
 # Utility helpers
 # -----------------------------------------------------------------------------
+
 
 def _ensure_id(raw_id: Optional[Any], text: str, prefix: Optional[str]) -> str:
     if raw_id is not None and str(raw_id).strip():
@@ -168,7 +192,9 @@ def _as_list(x: Any) -> List[str]:
     if isinstance(x, str):
         # try to parse JSON-like list
         s = x.strip()
-        if (s.startswith("[") and s.endswith("]")) or (s.startswith("(") and s.endswith(")")):
+        if (s.startswith("[") and s.endswith("]")) or (
+            s.startswith("(") and s.endswith(")")
+        ):
             try:
                 j = json.loads(s.replace("(", "[").replace(")", "]"))
                 return [str(i) for i in j]
@@ -208,6 +234,7 @@ def _normalize_text(text: str, *, lower: bool, strip: bool) -> str:
 # -----------------------------------------------------------------------------
 # Base class
 # -----------------------------------------------------------------------------
+
 
 class BaseLoader:
     """\
@@ -252,7 +279,9 @@ class BaseLoader:
         if raw_text is None or (isinstance(raw_text, float) and pd.isna(raw_text)):
             return None  # drop invalid rows silently
 
-        text = _normalize_text(str(raw_text), lower=self.cfg.lowercase_text, strip=self.cfg.strip_text)
+        text = _normalize_text(
+            str(raw_text), lower=self.cfg.lowercase_text, strip=self.cfg.strip_text
+        )
 
         # id
         raw_id = row.get(f.id or "id")
@@ -265,11 +294,19 @@ class BaseLoader:
                 label = self.cfg.label_map[raw_label]
             except Exception:
                 # try str/raw fallbacks
-                label = self.cfg.label_map.get(str(raw_label), self.cfg.label_map.get(int(raw_label) if str(raw_label).isdigit() else raw_label, raw_label))
+                label = self.cfg.label_map.get(
+                    str(raw_label),
+                    self.cfg.label_map.get(
+                        int(raw_label) if str(raw_label).isdigit() else raw_label,
+                        raw_label,
+                    ),
+                )
         try:
             ilabel = int(label)
         except Exception:
-            LOGGER.warning("Label not int-like; fallback to 0: id=%s, raw=%r", rid, raw_label)
+            LOGGER.warning(
+                "Label not int-like; fallback to 0: id=%s, raw=%r", rid, raw_label
+            )
             ilabel = 0
 
         # optional fields
@@ -299,12 +336,15 @@ class BaseLoader:
                 for k in f.meta:
                     meta[k] = row.get(k)
 
-        return NewsRecord(id=rid, text=text, label=ilabel, entities=ents, contexts=ctxs, meta=meta)
+        return NewsRecord(
+            id=rid, text=text, label=ilabel, entities=ents, contexts=ctxs, meta=meta
+        )
 
 
 # -----------------------------------------------------------------------------
 # CSV/JSONL loader
 # -----------------------------------------------------------------------------
+
 
 @_DATASET_REG.register("csv", alias=["CSV"])  # type: ignore[attr-defined]
 class CSVLoader(BaseLoader):
@@ -315,7 +355,9 @@ class CSVLoader(BaseLoader):
 
     def load_split(self, split: str) -> List[NewsRecord]:
         if not self.cfg.splits or split not in self.cfg.splits:
-            LOGGER.warning("Split '%s' not configured for dataset '%s'", split, self.name)
+            LOGGER.warning(
+                "Split '%s' not configured for dataset '%s'", split, self.name
+            )
             return []
         file = Path(self.cfg.splits[split])
         if not file.is_absolute() and self.cfg.path:
@@ -324,9 +366,20 @@ class CSVLoader(BaseLoader):
             LOGGER.error("CSV file not found: %s", file)
             return []
         LOGGER.info("Loading CSV: %s (split=%s)", file, split)
-        df = pd.read_csv(file, encoding=self.cfg.encoding, sep=self.cfg.delimiter, dtype=str, keep_default_na=False)
-        if self.cfg.drop_duplicates_on_text and (self.cfg.fields.text or "text") in df.columns:
-            df = df.drop_duplicates(subset=[self.cfg.fields.text or "text"]).reset_index(drop=True)
+        df = pd.read_csv(
+            file,
+            encoding=self.cfg.encoding,
+            sep=self.cfg.delimiter,
+            dtype=str,
+            keep_default_na=False,
+        )
+        if (
+            self.cfg.drop_duplicates_on_text
+            and (self.cfg.fields.text or "text") in df.columns
+        ):
+            df = df.drop_duplicates(
+                subset=[self.cfg.fields.text or "text"]
+            ).reset_index(drop=True)
         recs: List[NewsRecord] = []
         for _, row in df.iterrows():
             r = self._normalize_row(row)
@@ -345,7 +398,9 @@ class JSONLinesLoader(BaseLoader):
 
     def load_split(self, split: str) -> List[NewsRecord]:
         if not self.cfg.splits or split not in self.cfg.splits:
-            LOGGER.warning("Split '%s' not configured for dataset '%s'", split, self.name)
+            LOGGER.warning(
+                "Split '%s' not configured for dataset '%s'", split, self.name
+            )
             return []
         file = Path(self.cfg.splits[split])
         if not file.is_absolute() and self.cfg.path:
@@ -353,7 +408,9 @@ class JSONLinesLoader(BaseLoader):
         if not file.exists():
             LOGGER.error("JSON file not found: %s", file)
             return []
-        LOGGER.info("Loading JSON%s: %s (split=%s)", "L" if self.cfg.lines else "", file, split)
+        LOGGER.info(
+            "Loading JSON%s: %s (split=%s)", "L" if self.cfg.lines else "", file, split
+        )
 
         rows: List[Mapping[str, Any]]
         if self.cfg.lines:
@@ -391,6 +448,7 @@ class JSONLinesLoader(BaseLoader):
 # HuggingFace Datasets loader
 # -----------------------------------------------------------------------------
 
+
 @_DATASET_REG.register("hf", alias=["huggingface", "datasets"])  # type: ignore[attr-defined]
 class HFDatasetLoader(BaseLoader):
     """\
@@ -401,14 +459,23 @@ class HFDatasetLoader(BaseLoader):
     def __init__(self, cfg: DatasetConfig) -> None:
         super().__init__(cfg)
         if hfd is None:
-            raise RuntimeError("'datasets' is not installed; please `pip install datasets`." )
+            raise RuntimeError(
+                "'datasets' is not installed; please `pip install datasets`."
+            )
 
     def load_split(self, split: str) -> List[NewsRecord]:
         ds_split = None
         if self.cfg.splits and split in self.cfg.splits:
             ds_split = str(self.cfg.splits[split])
-        LOGGER.info("Loading HF dataset: name=%s, config=%s, split=%s", self.cfg.hf_name, self.cfg.hf_config, ds_split or split)
-        ds = hfd.load_dataset(self.cfg.hf_name, self.cfg.hf_config, split=ds_split or split)
+        LOGGER.info(
+            "Loading HF dataset: name=%s, config=%s, split=%s",
+            self.cfg.hf_name,
+            self.cfg.hf_config,
+            ds_split or split,
+        )
+        ds = hfd.load_dataset(
+            self.cfg.hf_name, self.cfg.hf_config, split=ds_split or split
+        )
         recs: List[NewsRecord] = []
         for row in ds:
             r = self._normalize_row(row)
@@ -422,6 +489,7 @@ class HFDatasetLoader(BaseLoader):
 # Builder helpers
 # -----------------------------------------------------------------------------
 
+
 def build_loader(cfg: DatasetConfig) -> BaseLoader:
     """\
     @zh 通过注册表构建加载器：cfg.format ∈ {csv,jsonl,hf}。
@@ -431,6 +499,7 @@ def build_loader(cfg: DatasetConfig) -> BaseLoader:
     # Prefer registry (if available)
     try:
         from kan.utils.registry import HUB
+
         reg = HUB.get_or_create("dataset")
         klass = reg.get(key)  # type: ignore[attr-defined]
         if klass is None:
@@ -451,13 +520,16 @@ def build_loader(cfg: DatasetConfig) -> BaseLoader:
 # Convenience: tiny in-memory Dataset wrapper
 # -----------------------------------------------------------------------------
 
+
 class Dataset:
     """\
     @zh 简单的数据集容器：按 split 缓存 `NewsRecord` 列表，便于下游 batcher 使用。
     @en Simple in-memory container of `NewsRecord` lists per split.
     """
 
-    def __init__(self, loader: BaseLoader, *, preload: Optional[Sequence[str]] = None) -> None:
+    def __init__(
+        self, loader: BaseLoader, *, preload: Optional[Sequence[str]] = None
+    ) -> None:
         self.loader = loader
         self._data: Dict[str, List[NewsRecord]] = {}
         if preload:
@@ -479,6 +551,7 @@ class Dataset:
 # -----------------------------------------------------------------------------
 # Example factory from a dict-like config (e.g., loaded YAML)
 # -----------------------------------------------------------------------------
+
 
 def loader_from_config(cfg_dict: Mapping[str, Any]) -> BaseLoader:
     """\

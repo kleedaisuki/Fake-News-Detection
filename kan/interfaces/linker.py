@@ -19,7 +19,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple, runtime_checkable
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    runtime_checkable,
+)
 
 
 # ----------------------------- Type Aliases -----------------------------
@@ -36,23 +47,26 @@ class Mention:
     @en
       A surface mention and its linking result.
     """
-    text: str                    # 原文片段
-    start_char: int              # 起始字符索引（含）
-    end_char: int                # 结束字符索引（不含）
+
+    text: str  # 原文片段
+    start_char: int  # 起始字符索引（含）
+    end_char: int  # 结束字符索引（不含）
     entity_id: Optional[EntityID]  # 解析到的实体ID，可能为 None
     score: Optional[float] = None  # 置信度（实现自定义）
-    provider: Optional[str] = None # 实现方标识（如 "tagme"）
+    provider: Optional[str] = None  # 实现方标识（如 "tagme"）
     extra: Mapping[str, Any] = field(default_factory=dict)  # 其他元数据
 
 
 # ----------------------------- Exceptions ------------------------------
 class LinkerError(RuntimeError):
     """Base error for linker implementations."""
+
     pass
 
 
 class RateLimitError(LinkerError):
     """Raised when upstream EL service rate limit is hit."""
+
     pass
 
 

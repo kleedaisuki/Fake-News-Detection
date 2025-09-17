@@ -39,8 +39,9 @@ class SequenceBatch:
       - mask: [B, L] attention mask (1 = valid).
       - type_ids: optional segment ids.
     """
-    ids: Tensor            # LongTensor [B, L]
-    mask: Tensor           # LongTensor/BoolTensor [B, L]
+
+    ids: Tensor  # LongTensor [B, L]
+    mask: Tensor  # LongTensor/BoolTensor [B, L]
     type_ids: Optional[Tensor] = None  # LongTensor [B, L] (optional)
 
 
@@ -54,8 +55,9 @@ class EncoderOutput:
       Encoder output with last hidden states and a pooled vector.
       Pooling strategy is implementation-defined (CLS/mean-pool/etc.).
     """
-    last_hidden_state: Tensor   # [B, L, D]
-    pooled_state: Tensor        # [B, D]
+
+    last_hidden_state: Tensor  # [B, L, D]
+    pooled_state: Tensor  # [B, D]
 
 
 # ------------------------------ Protocols -------------------------------
@@ -65,6 +67,7 @@ class ITextEncoder(Protocol):
     @zh 文本编码器：S → p / P，用于生成新闻文本表示。
     @en Text encoder for news content representations.
     """
+
     @property
     def d_model(self) -> int:
         """@zh 模型隐层维度 D；@en hidden size D."""
@@ -101,19 +104,15 @@ class IKnowledgeEncoder(Protocol):
       Knowledge encoder for entity or entity-context sequences (q' or r').
       Shares the same batch interface as ITextEncoder to align Q/K/V dims.
     """
-    @property
-    def d_model(self) -> int:
-        ...
 
     @property
-    def device(self) -> torch.device:
-        ...
+    def d_model(self) -> int: ...
 
-    def encode(self, batch: SequenceBatch, *, train: bool = False) -> EncoderOutput:
-        ...
+    @property
+    def device(self) -> torch.device: ...
 
-    def to(self, device: torch.device) -> "IKnowledgeEncoder":
-        ...
+    def encode(self, batch: SequenceBatch, *, train: bool = False) -> EncoderOutput: ...
 
-    def close(self) -> None:
-        ...
+    def to(self, device: torch.device) -> "IKnowledgeEncoder": ...
+
+    def close(self) -> None: ...

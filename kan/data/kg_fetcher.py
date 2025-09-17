@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
 """
 @file   kan/pipelines/kg_fetcher.py
 @brief  Knowledge-graph context fetcher for KAN: fetch 1-hop neighbors for entities.
@@ -53,15 +54,20 @@ except Exception:  # pragma: no cover - optional
 # Registry hub (optional at import time)
 try:
     from kan.utils.registry import HUB
+
     _KG_REG = HUB.get_or_create("kg_fetcher")
 except Exception:  # pragma: no cover - registry may be unavailable at import time
+
     class _DummyReg:
         def register(self, *_a, **_k):
             def deco(x):
                 return x
+
             return deco
+
         def get(self, *_a, **_k):
             return None
+
     _KG_REG = _DummyReg()  # type: ignore
 
 LOGGER = logging.getLogger("kan.pipelines.kg_fetcher")
@@ -69,6 +75,7 @@ LOGGER = logging.getLogger("kan.pipelines.kg_fetcher")
 # -----------------------------------------------------------------------------
 # Config
 # -----------------------------------------------------------------------------
+
 
 @dataclass
 class KGConfig:
@@ -92,6 +99,7 @@ class KGConfig:
       wikidata_endpoint: REST 端点（例如 https://www.wikidata.org/wiki/Special:EntityData/ 变体）
       sparql_endpoint:   SPARQL 端点（例如 https://query.wikidata.org/sparql）
     """
+
     backend: str = "local"
     cache_dir: Optional[str] = ".cache/kg"
     topk: Optional[int] = 64
@@ -112,6 +120,7 @@ class KGConfig:
 # Cache (per QID)
 # -----------------------------------------------------------------------------
 
+
 class _Cache:
     def __init__(self, dir_: Optional[str], backend_sig: str) -> None:
         self.dir = Path(dir_) if dir_ else None
@@ -121,7 +130,9 @@ class _Cache:
 
     def _key(self, qid: str) -> Path:
         # Stable shard by backend signature and QID
-        h = blake2b((self.backend_sig + "\n" + qid).encode("utf-8"), digest_size=12).hexdigest()
+        h = blake2b(
+            (self.backend_sig + "\n" + qid).encode("utf-8"), digest_size=12
+        ).hexdigest()
         assert self.dir is not None
         return self.dir / h[:2] / f"{qid}.json"
 
@@ -145,12 +156,15 @@ class _Cache:
             return
         p = self._key(qid)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps({"neighbors": neighbors}, ensure_ascii=False), encoding="utf-8")
+        p.write_text(
+            json.dumps({"neighbors": neighbors}, ensure_ascii=False), encoding="utf-8"
+        )
 
 
 # -----------------------------------------------------------------------------
 # Provider interface
 # -----------------------------------------------------------------------------
+
 
 class BaseProvider:
     name: str = "base"
@@ -169,6 +183,7 @@ class BaseProvider:
 # -----------------------------------------------------------------------------
 # Local provider (zero dependency, CI friendly)
 # -----------------------------------------------------------------------------
+
 
 @_KG_REG.register("local", alias=["file", "json"])  # type: ignore[attr-defined]
 class LocalProvider(BaseProvider):
@@ -220,12 +235,15 @@ class LocalProvider(BaseProvider):
 # Wikidata REST provider (placeholder; optional network)
 # -----------------------------------------------------------------------------
 
+
 @_KG_REG.register("wikidata_rest")  # type: ignore[attr-defined]
 class WikidataRESTProvider(BaseProvider):
     name = "wikidata_rest"
     version = "0"
 
-    def fetch(self, qid: str) -> List[Tuple[str, Optional[str]]]:  # pragma: no cover - network placeholder
+    def fetch(
+        self, qid: str
+    ) -> List[Tuple[str, Optional[str]]]:  # pragma: no cover - network placeholder
         if requests is None:
             raise RuntimeError("'requests' is not available. Please install requests.")
         if not self.cfg.wikidata_endpoint:
@@ -260,12 +278,15 @@ class WikidataRESTProvider(BaseProvider):
 # SPARQL provider (placeholder; optional network)
 # -----------------------------------------------------------------------------
 
+
 @_KG_REG.register("sparql")  # type: ignore[attr-defined]
 class SPARQLProvider(BaseProvider):
     name = "sparql"
     version = "0"
 
-    def fetch(self, qid: str) -> List[Tuple[str, Optional[str]]]:  # pragma: no cover - network placeholder
+    def fetch(
+        self, qid: str
+    ) -> List[Tuple[str, Optional[str]]]:  # pragma: no cover - network placeholder
         if requests is None:
             raise RuntimeError("'requests' is not available. Please install requests.")
         if not self.cfg.sparql_endpoint:
@@ -281,8 +302,12 @@ class SPARQLProvider(BaseProvider):
           FILTER(STRSTARTS(?q, 'Q'))
         }} LIMIT 2000
         """
-        r = requests.get(endpoint, params={"query": query, "format": "json"}, timeout=self.cfg.timeout,
-                         headers={"User-Agent": "KAN-KGFetcher/0.1"})
+        r = requests.get(
+            endpoint,
+            params={"query": query, "format": "json"},
+            timeout=self.cfg.timeout,
+            headers={"User-Agent": "KAN-KGFetcher/0.1"},
+        )
         r.raise_for_status()
         data = r.json()
         out: List[Tuple[str, Optional[str]]] = []
@@ -303,10 +328,12 @@ class SPARQLProvider(BaseProvider):
 # Factory
 # -----------------------------------------------------------------------------
 
+
 def build_provider(cfg: KGConfig) -> BaseProvider:
     key = (cfg.backend or "local").lower()
     try:
         from kan.utils.registry import HUB
+
         reg = HUB.get_or_create("kg_fetcher")
         klass = reg.get(key)
         if klass is None:
@@ -326,7 +353,10 @@ def build_provider(cfg: KGConfig) -> BaseProvider:
 # Public pipeline function
 # -----------------------------------------------------------------------------
 
-def fetch_context(records: List[NewsRecord], cfg: KGConfig, *, inplace: Optional[bool] = None) -> List[NewsRecord]:
+
+def fetch_context(
+    records: List[NewsRecord], cfg: KGConfig, *, inplace: Optional[bool] = None
+) -> List[NewsRecord]:
     """Fetch 1-hop neighbors for entities and return updated records.
 
     @params
@@ -342,14 +372,17 @@ def fetch_context(records: List[NewsRecord], cfg: KGConfig, *, inplace: Optional
 
     provider = build_provider(cfg)
 
-    backend_sig = json.dumps({
-        "backend": provider.__class__.__name__,
-        "version": getattr(provider, "version", "0"),
-        "return_edges": cfg.return_edges,
-        "properties": tuple(cfg.properties) if cfg.properties else None,
-        "direction": cfg.direction,
-        "topk": cfg.topk,
-    }, sort_keys=True)
+    backend_sig = json.dumps(
+        {
+            "backend": provider.__class__.__name__,
+            "version": getattr(provider, "version", "0"),
+            "return_edges": cfg.return_edges,
+            "properties": tuple(cfg.properties) if cfg.properties else None,
+            "direction": cfg.direction,
+            "topk": cfg.topk,
+        },
+        sort_keys=True,
+    )
 
     cache = _Cache(cfg.cache_dir, backend_sig)
 
@@ -363,7 +396,7 @@ def fetch_context(records: List[NewsRecord], cfg: KGConfig, *, inplace: Optional
     # Pre-collect unique QIDs across records to amortize fetching
     qids: List[str] = []
     for rec in out:
-        for q in (rec.entities or []):
+        for q in rec.entities or []:
             if q and q.startswith("Q"):
                 qids.append(q)
     uniq_qids = sorted(set(qids))
@@ -389,10 +422,14 @@ def fetch_context(records: List[NewsRecord], cfg: KGConfig, *, inplace: Optional
         pairs = provider.fetch(qid)
         # filter by properties/direction if applicable (direction is advisory here)
         if cfg.properties:
-            pairs = [(n,p) for (n,p) in pairs if (p in cfg.properties) or (p is None and cfg.return_edges == "none")]
+            pairs = [
+                (n, p)
+                for (n, p) in pairs
+                if (p in cfg.properties) or (p is None and cfg.return_edges == "none")
+            ]
         # normalize output
         if cfg.return_edges == "labeled":
-            neighbors = [f"{p}={n}" if p else n for (n,p) in pairs]
+            neighbors = [f"{p}={n}" if p else n for (n, p) in pairs]
         else:
             neighbors = [n for (n, _p) in pairs]
         # dedupe & top-k
@@ -405,7 +442,7 @@ def fetch_context(records: List[NewsRecord], cfg: KGConfig, *, inplace: Optional
     # write back to records
     for rec in out:
         ctx: Dict[str, List[str]] = {}
-        for q in (rec.entities or []):
+        for q in rec.entities or []:
             ns = qid2neighbors.get(q, [])
             if ns:
                 ctx[q] = list(ns)
@@ -413,20 +450,30 @@ def fetch_context(records: List[NewsRecord], cfg: KGConfig, *, inplace: Optional
         # traceability
         rec.meta = dict(rec.meta or {})
         rec.meta.setdefault("kg", {})
-        rec.meta["kg"].update({
-            "backend": provider.__class__.__name__,
-            "version": getattr(provider, "version", "0"),
-            "time": _now_iso(),
-            "qids": list(rec.entities or []),
-            "stats": {"uniq_qids": len(uniq_qids), "total_q": total_q, "cache_hit": cache_hit},
-            "return_edges": cfg.return_edges,
-            "topk": cfg.topk,
-            "properties": list(cfg.properties) if cfg.properties else None,
-        })
+        rec.meta["kg"].update(
+            {
+                "backend": provider.__class__.__name__,
+                "version": getattr(provider, "version", "0"),
+                "time": _now_iso(),
+                "qids": list(rec.entities or []),
+                "stats": {
+                    "uniq_qids": len(uniq_qids),
+                    "total_q": total_q,
+                    "cache_hit": cache_hit,
+                },
+                "return_edges": cfg.return_edges,
+                "topk": cfg.topk,
+                "properties": list(cfg.properties) if cfg.properties else None,
+            }
+        )
 
     LOGGER.info(
         "KG fetch done: records=%d, uniq_qids=%d, cache_hit=%d, backend=%s/%s",
-        len(out), len(uniq_qids), cache_hit, provider.__class__.__name__, getattr(provider, "version", "0")
+        len(out),
+        len(uniq_qids),
+        cache_hit,
+        provider.__class__.__name__,
+        getattr(provider, "version", "0"),
     )
     return out
 
@@ -434,6 +481,7 @@ def fetch_context(records: List[NewsRecord], cfg: KGConfig, *, inplace: Optional
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
+
 
 def _unique_preserve(arr: Sequence[str]) -> List[str]:
     seen = set()

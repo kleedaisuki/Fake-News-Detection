@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
 """
 @file   kan/modules/vectorizer.py
 @brief  Pluggable text vectorizer with swap-friendly backends (HF / SentenceTransformers).
@@ -62,6 +63,7 @@ except Exception:  # pragma: no cover
 # Config
 # ----------------------------------------------------------------------------
 
+
 @dataclass
 class VectorizerConfig:
     """Vectorizer configuration (align with configs/model/vectorizer.yaml).
@@ -97,7 +99,7 @@ class VectorizerConfig:
     local_files_only: bool = False
 
     hf_tokenizer_kwargs: Dict[str, Any] = None  # type: ignore[assignment]
-    hf_model_kwargs: Dict[str, Any] = None      # type: ignore[assignment]
+    hf_model_kwargs: Dict[str, Any] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:  # defaults for dict fields
         if self.hf_tokenizer_kwargs is None:
@@ -110,6 +112,7 @@ class VectorizerConfig:
 # Cache (per-text, content addressed by backend signature + text)
 # ----------------------------------------------------------------------------
 
+
 class _VecCache:
     def __init__(self, dir_: Optional[str], backend_sig: str) -> None:
         self.dir = Path(dir_) if dir_ else None
@@ -118,7 +121,9 @@ class _VecCache:
             self.dir.mkdir(parents=True, exist_ok=True)
 
     def _path(self, text: str) -> Path:
-        h = blake2b((self.sig + "\n" + text).encode("utf-8"), digest_size=16).hexdigest()
+        h = blake2b(
+            (self.sig + "\n" + text).encode("utf-8"), digest_size=16
+        ).hexdigest()
         assert self.dir is not None
         return self.dir / h[:2] / f"{h}.pt"
 
@@ -151,6 +156,7 @@ class _VecCache:
 # Base interface
 # ----------------------------------------------------------------------------
 
+
 class BaseVectorizer:
     name: str = "base"
     version: str = "0"
@@ -158,15 +164,18 @@ class BaseVectorizer:
     def __init__(self, cfg: VectorizerConfig) -> None:
         self.cfg = cfg
         # Build backend signature for cache & reproducibility
-        self.backend_sig = json.dumps({
-            "backend": self.__class__.__name__,
-            "version": getattr(self, "version", "0"),
-            "model": cfg.model_name,
-            "pooling": cfg.pooling,
-            "max_length": cfg.max_length,
-            "normalize": cfg.normalize,
-            "dtype": cfg.dtype,
-        }, sort_keys=True)
+        self.backend_sig = json.dumps(
+            {
+                "backend": self.__class__.__name__,
+                "version": getattr(self, "version", "0"),
+                "model": cfg.model_name,
+                "pooling": cfg.pooling,
+                "max_length": cfg.max_length,
+                "normalize": cfg.normalize,
+                "dtype": cfg.dtype,
+            },
+            sort_keys=True,
+        )
         self.cache = _VecCache(cfg.cache_dir, self.backend_sig)
 
     # Public API --------------------------------------------------------------
@@ -181,6 +190,7 @@ class BaseVectorizer:
 # ----------------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------------
+
 
 def _pick_device(spec: Optional[str]) -> str:
     if spec:
@@ -218,6 +228,7 @@ def _l2_normalize(x: Tensor, eps: float = 1e-12) -> Tensor:
 # HF backend
 # ----------------------------------------------------------------------------
 
+
 class HFVectorizer(BaseVectorizer):
     name = "hf"
     version = "1"
@@ -228,9 +239,15 @@ class HFVectorizer(BaseVectorizer):
         super().__init__(cfg)
         self.device = _pick_device(cfg.device)
         self.torch_dtype = _to_dtype(cfg.dtype)
-        tok_kwargs = dict(trust_remote_code=cfg.trust_remote_code, local_files_only=cfg.local_files_only)
+        tok_kwargs = dict(
+            trust_remote_code=cfg.trust_remote_code,
+            local_files_only=cfg.local_files_only,
+        )
         tok_kwargs.update(cfg.hf_tokenizer_kwargs)
-        mdl_kwargs = dict(trust_remote_code=cfg.trust_remote_code, local_files_only=cfg.local_files_only)
+        mdl_kwargs = dict(
+            trust_remote_code=cfg.trust_remote_code,
+            local_files_only=cfg.local_files_only,
+        )
         mdl_kwargs.update(cfg.hf_model_kwargs)
         self.tok = AutoTokenizer.from_pretrained(cfg.model_name, **tok_kwargs)
         self.mdl = AutoModel.from_pretrained(cfg.model_name, **mdl_kwargs)
@@ -241,7 +258,13 @@ class HFVectorizer(BaseVectorizer):
                 pass
         self.mdl = self.mdl.to(self.device)
         self.mdl.eval()
-        LOGGER.info("HFVectorizer ready: model=%s, device=%s, dtype=%s, pooling=%s", cfg.model_name, self.device, cfg.dtype, cfg.pooling)
+        LOGGER.info(
+            "HFVectorizer ready: model=%s, device=%s, dtype=%s, pooling=%s",
+            cfg.model_name,
+            self.device,
+            cfg.dtype,
+            cfg.pooling,
+        )
 
     @torch.no_grad()  # type: ignore[misc]
     def encode_texts(self, texts: Sequence[str]) -> Tensor:
@@ -250,7 +273,7 @@ class HFVectorizer(BaseVectorizer):
         bs = max(1, int(self.cfg.batch_size))
         all_vecs: List[Tensor] = []
         for i in range(0, len(texts), bs):
-            batch = list(texts[i:i+bs])
+            batch = list(texts[i : i + bs])
             # cache probe first
             cached_flags = [False] * len(batch)
             cached_vecs: List[Optional[Tensor]] = [None] * len(batch)
@@ -262,7 +285,13 @@ class HFVectorizer(BaseVectorizer):
             to_run = [batch[j] for j, f in enumerate(cached_flags) if not f]
             out_vecs: List[Tensor] = []
             if to_run:
-                enc = self.tok(to_run, padding=True, truncation=True, max_length=self.cfg.max_length, return_tensors="pt")
+                enc = self.tok(
+                    to_run,
+                    padding=True,
+                    truncation=True,
+                    max_length=self.cfg.max_length,
+                    return_tensors="pt",
+                )
                 enc = {k: v.to(self.device) for k, v in enc.items()}
                 out = self.mdl(**enc)
                 # hidden states: [B, T, H]
@@ -298,17 +327,25 @@ class HFVectorizer(BaseVectorizer):
 # SentenceTransformers backend
 # ----------------------------------------------------------------------------
 
+
 class STVectorizer(BaseVectorizer):
     name = "sentence_transformers"
     version = "1"
 
     def __init__(self, cfg: VectorizerConfig) -> None:
         if torch is None or SentenceTransformer is None:
-            raise RuntimeError("SentenceTransformers backend requires 'torch' and 'sentence-transformers'.")
+            raise RuntimeError(
+                "SentenceTransformers backend requires 'torch' and 'sentence-transformers'."
+            )
         super().__init__(cfg)
         self.device = _pick_device(cfg.device)
         self.mdl = SentenceTransformer(cfg.model_name, device=self.device)
-        LOGGER.info("STVectorizer ready: model=%s, device=%s, pooling=%s", cfg.model_name, self.device, cfg.pooling)
+        LOGGER.info(
+            "STVectorizer ready: model=%s, device=%s, pooling=%s",
+            cfg.model_name,
+            self.device,
+            cfg.pooling,
+        )
 
     def encode_texts(self, texts: Sequence[str]) -> Tensor:
         if not texts:
@@ -335,7 +372,7 @@ class STVectorizer(BaseVectorizer):
                 normalize_embeddings=self.cfg.normalize,
                 show_progress_bar=False,
                 device=self.device,
-                )
+            )
             # SentenceTransformers returns [N, D] tensor on device
             out_vecs = arr.detach().to("cpu").split(1, dim=0)  # list of [1,D]
             out_vecs = [v.squeeze(0) for v in out_vecs]
@@ -358,20 +395,27 @@ class STVectorizer(BaseVectorizer):
 
 try:
     from kan.utils.registry import HUB
+
     _VEC_REG = HUB.get_or_create("vectorizer")
 except Exception:  # pragma: no cover
+
     class _DummyReg:
         def register(self, *_a, **_k):
             def deco(x):
                 return x
+
             return deco
+
         def get(self, *_a, **_k):
             return None
+
     _VEC_REG = _DummyReg()  # type: ignore
+
 
 @_VEC_REG.register("hf", alias=["transformers"])  # type: ignore[attr-defined]
 class _HFReg(HFVectorizer):
     pass
+
 
 @_VEC_REG.register("sentence_transformers", alias=["st", "sentence-transformers"])  # type: ignore[attr-defined]
 class _STReg(STVectorizer):
@@ -383,6 +427,7 @@ def build_vectorizer(cfg: VectorizerConfig) -> BaseVectorizer:
     # Prefer registry
     try:
         from kan.utils.registry import HUB
+
         reg = HUB.get_or_create("vectorizer")
         klass = reg.get(key)
         if klass is None:

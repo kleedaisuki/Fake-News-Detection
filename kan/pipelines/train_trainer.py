@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
 """
 @file   kan/pipelines/train_trainer.py
 @brief  Pipeline: 使用 🤗 Transformers `Trainer` 训练 KAN（可切换为仅文本 / 文本+知识）。
@@ -29,7 +30,17 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 import torch
 import torch.nn as nn
@@ -54,17 +65,25 @@ except Exception as e:  # pragma: no cover
 try:
     from kan.utils.logging import configure_logging, log_context
     import logging
+
     LOGGER = logging.getLogger("kan.pipelines.train_trainer")
 except Exception:  # 兼容仓库尚未落位 `kan/utils/logging.py` 的情况
     import logging
-    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(name)s | %(message)s")
+
+    logging.basicConfig(
+        level=logging.INFO, format="[%(asctime)s] %(levelname)s %(name)s | %(message)s"
+    )
     LOGGER = logging.getLogger("kan.pipelines.train_trainer")
+
     def configure_logging(*args, **kwargs):  # type: ignore
         pass
+
     from contextlib import contextmanager
+
     @contextmanager
     def log_context(**kwargs):  # type: ignore
         yield
+
 
 # ------------------------------
 # 工具：YAML 读取与深合并、点号覆盖
@@ -75,7 +94,9 @@ except Exception as e:  # pragma: no cover
     raise RuntimeError("缺少 PyYAML，请 `pip install pyyaml`。") from e
 
 
-def _deep_update(base: MutableMapping[str, Any], other: Mapping[str, Any]) -> MutableMapping[str, Any]:
+def _deep_update(
+    base: MutableMapping[str, Any], other: Mapping[str, Any]
+) -> MutableMapping[str, Any]:
     for k, v in other.items():
         if isinstance(v, Mapping) and isinstance(base.get(k), Mapping):
             _deep_update(base[k], v)  # type: ignore
@@ -113,15 +134,19 @@ def _apply_overrides(cfg: MutableMapping[str, Any], overrides: Sequence[str]) ->
 # 数据加载与批处理（依赖 kan.data.*）
 # ------------------------------
 
+
 class RecordsDataset(Dataset):
     """按需从 `kan.data.loaders` 返回的 List[NewsRecord] 暴露给 Trainer。
 
     我们不在此处做张量化，而是在 Collator 中调用 batcher 统一打包，便于灵活裁剪 E/N/T。
     """
+
     def __init__(self, records: List[Mapping[str, Any]]):
         self.records = records
+
     def __len__(self) -> int:  # type: ignore[override]
         return len(self.records)
+
     def __getitem__(self, idx: int) -> Mapping[str, Any]:  # type: ignore[override]
         return self.records[idx]
 
@@ -130,8 +155,10 @@ class KANDataCollator:
     """调用 `kan.data.batcher.Batcher` 的 collate 接口在 **collate_fn** 阶段完成打包。
     这样 Dataset 仅承担“样本记录容器”，Collator 负责把一批 `NewsRecord` → model inputs。
     """
+
     def __init__(self, batcher: Any):
         self.batcher = batcher
+
     def __call__(self, examples: List[Mapping[str, Any]]) -> Mapping[str, Any]:
         return self.batcher.collate(examples)
 
@@ -139,6 +166,7 @@ class KANDataCollator:
 # ------------------------------
 # KAN 组合模型封装为 nn.Module 供 Trainer 使用
 # ------------------------------
+
 
 class KANForNewsClassification(nn.Module):
     """把三路编码器 + NE/NE2C + Head 组合为一个可训练模块。
@@ -148,16 +176,19 @@ class KANForNewsClassification(nn.Module):
     - `ent_*` / `ctx_*` 键来自 batcher 的 `ent_ids/ctx_ids/...`；
     - 返回字典包含 `loss`（若提供 labels）与 `logits`。
     """
-    def __init__(self,
-                 text_encoder: Any,
-                 entity_encoder: Optional[Any],
-                 context_encoder: Optional[Any],
-                 ne: Optional[Any],
-                 ne2c: Optional[Any],
-                 head: Any,
-                 use_q: bool = True,
-                 use_r: bool = True,
-                 num_labels: int = 2):
+
+    def __init__(
+        self,
+        text_encoder: Any,
+        entity_encoder: Optional[Any],
+        context_encoder: Optional[Any],
+        ne: Optional[Any],
+        ne2c: Optional[Any],
+        head: Any,
+        use_q: bool = True,
+        use_r: bool = True,
+        num_labels: int = 2,
+    ):
         super().__init__()
         self.text_encoder = text_encoder
         self.entity_encoder = entity_encoder
@@ -172,7 +203,9 @@ class KANForNewsClassification(nn.Module):
     def forward(self, **batch) -> Mapping[str, torch.Tensor]:  # type: ignore[override]
         # 1) 文本编码 → p
         if "text_tok" in batch:
-            te_out = self.text_encoder(**batch["text_tok"])  # 期望：{sequence_output, pooled_output, attention_mask}
+            te_out = self.text_encoder(
+                **batch["text_tok"]
+            )  # 期望：{sequence_output, pooled_output, attention_mask}
             p = te_out["pooled_output"]
             news_hidden = te_out.get("sequence_output")
             news_mask = te_out.get("attention_mask")
@@ -189,8 +222,12 @@ class KANForNewsClassification(nn.Module):
 
         # 2) 实体/上下文编码（若可用）
         if self.entity_encoder is not None and ("ent_ids" in batch):
-            ent_out = self.entity_encoder(entity_ids=batch["ent_ids"], entity_mask=batch.get("ent_mask"),
-                                          context_ids=batch.get("ctx_ids"), context_mask=batch.get("ctx_mask"))
+            ent_out = self.entity_encoder(
+                entity_ids=batch["ent_ids"],
+                entity_mask=batch.get("ent_mask"),
+                context_ids=batch.get("ctx_ids"),
+                context_mask=batch.get("ctx_mask"),
+            )
             q_prime = ent_out.get("entities_last_hidden")
             ents_mask = ent_out.get("entities_mask") or batch.get("ent_mask")
             # 上下文可能来源于 entity_encoder 或独立的 context_encoder
@@ -215,20 +252,28 @@ class KANForNewsClassification(nn.Module):
                 q_out = self.ne(
                     news={"last_hidden_state": news_hidden, "pooled_state": p},
                     entities={"last_hidden_state": q_prime},
-                    news_mask=news_mask, entity_mask=ents_mask,
+                    news_mask=news_mask,
+                    entity_mask=ents_mask,
                     return_weights=False,
                 )
                 q = q_out.get("pooled") if isinstance(q_out, dict) else q_out
             except NotImplementedError:
                 # 签名存在但算法未实现时，优雅退化：跳过 q
                 q = None
-        if self.use_r and self.ne2c is not None and (q_prime is not None) and (r_prime is not None):
+        if (
+            self.use_r
+            and self.ne2c is not None
+            and (q_prime is not None)
+            and (r_prime is not None)
+        ):
             try:
                 r_out = self.ne2c(
                     news={"last_hidden_state": news_hidden, "pooled_state": p},
                     entities={"last_hidden_state": q_prime},
                     contexts_last_hidden=r_prime,
-                    news_mask=news_mask, entity_mask=ents_mask, contexts_mask=ctxs_mask,
+                    news_mask=news_mask,
+                    entity_mask=ents_mask,
+                    contexts_mask=ctxs_mask,
                     return_weights=False,
                 )
                 r = r_out.get("pooled") if isinstance(r_out, dict) else r_out
@@ -236,7 +281,9 @@ class KANForNewsClassification(nn.Module):
                 r = None
 
         # 4) Head 分类
-        head_out = self.head(p=p if p is not None else None, q=q, r=r, labels=batch.get("labels"))
+        head_out = self.head(
+            p=p if p is not None else None, q=q, r=r, labels=batch.get("labels")
+        )
         # 兼容：head 可能返回 {logits,(loss),...}
         loss = head_out.get("loss") if isinstance(head_out, Mapping) else None
         logits = head_out.get("logits") if isinstance(head_out, Mapping) else head_out
@@ -247,13 +294,17 @@ class KANForNewsClassification(nn.Module):
 # 组件构建（Registry 优先，退化到简单构造）
 # ------------------------------
 
-def build_components(cfg: Mapping[str, Any]) -> Tuple[Any, Optional[Any], Optional[Any], Optional[Any], Optional[Any], Any]:
+
+def build_components(
+    cfg: Mapping[str, Any],
+) -> Tuple[Any, Optional[Any], Optional[Any], Optional[Any], Optional[Any], Any]:
     """从配置构建 text/entity/context encoders、NE/NE2C、Head。
     优先使用 `kan.utils.registry.HUB`，便于按 `type/name` 解耦；若不可用则尝试直接从模块导入默认构造器。
     """
     # try registry hub
     try:
         from kan.utils.registry import HUB, build_from_config
+
         TEXT = HUB.get_or_create("text_encoder")
         ENTITY = HUB.get_or_create("entity_encoder")
         CONTEXT = HUB.get_or_create("context_encoder")
@@ -261,10 +312,26 @@ def build_components(cfg: Mapping[str, Any]) -> Tuple[Any, Optional[Any], Option
         HEAD = HUB.get_or_create("head")
 
         te = build_from_config(cfg.get("text_encoder", {}), TEXT)
-        ee = build_from_config(cfg.get("entity_encoder", {}), ENTITY) if cfg.get("entity_encoder") else None
-        ce = build_from_config(cfg.get("context_encoder", {}), CONTEXT) if cfg.get("context_encoder") else None
-        ne = build_from_config(cfg.get("ne", {"type": "ne"}), ATT) if cfg.get("ne") else None
-        ne2c = build_from_config(cfg.get("ne2c", {"type": "ne2c"}), ATT) if cfg.get("ne2c") else None
+        ee = (
+            build_from_config(cfg.get("entity_encoder", {}), ENTITY)
+            if cfg.get("entity_encoder")
+            else None
+        )
+        ce = (
+            build_from_config(cfg.get("context_encoder", {}), CONTEXT)
+            if cfg.get("context_encoder")
+            else None
+        )
+        ne = (
+            build_from_config(cfg.get("ne", {"type": "ne"}), ATT)
+            if cfg.get("ne")
+            else None
+        )
+        ne2c = (
+            build_from_config(cfg.get("ne2c", {"type": "ne2c"}), ATT)
+            if cfg.get("ne2c")
+            else None
+        )
         hd = build_from_config(cfg.get("head", {}), HEAD)
         return te, ee, ce, ne, ne2c, hd
     except Exception as e:
@@ -274,18 +341,29 @@ def build_components(cfg: Mapping[str, Any]) -> Tuple[Any, Optional[Any], Option
         from kan.modules.entity_encoder import build_entity_encoder
         from kan.modules.context_encoder import build_context_encoder
         from kan.modules.head import build_head
+
         te = build_text_encoder(cfg.get("text_encoder", {}))
-        ee = build_entity_encoder(cfg.get("entity_encoder", {})) if cfg.get("entity_encoder") else None
-        ce = build_context_encoder(cfg.get("context_encoder", {})) if cfg.get("context_encoder") else None
+        ee = (
+            build_entity_encoder(cfg.get("entity_encoder", {}))
+            if cfg.get("entity_encoder")
+            else None
+        )
+        ce = (
+            build_context_encoder(cfg.get("context_encoder", {}))
+            if cfg.get("context_encoder")
+            else None
+        )
         ne = None
         ne2c = None
         try:
             from kan.modules.attention.ne import NEAttention  # type: ignore
+
             ne = NEAttention(**cfg.get("ne", {})) if cfg.get("ne") else None
         except Exception:
             pass
         try:
             from kan.modules.attention.ne2c import NE2CAttention  # type: ignore
+
             ne2c = NE2CAttention(**cfg.get("ne2c", {})) if cfg.get("ne2c") else None
         except Exception:
             pass
@@ -297,8 +375,10 @@ def build_components(cfg: Mapping[str, Any]) -> Tuple[Any, Optional[Any], Option
 # 指标：桥接到 kan.utils.metrics
 # ------------------------------
 
+
 def make_compute_metrics(problem_type: str = "single_label_classification"):
     from kan.utils.metrics import compute_classification_metrics
+
     def _fn(eval_pred):
         logits, labels = eval_pred
         if isinstance(logits, (list, tuple)):
@@ -308,16 +388,22 @@ def make_compute_metrics(problem_type: str = "single_label_classification"):
         if problem_type == "single_label_classification":
             y_score = torch.softmax(logits, dim=-1).cpu().numpy()
             y_pred = y_score.argmax(axis=-1)
-            return compute_classification_metrics(labels.cpu().numpy(), y_pred=y_pred, y_score=y_score)
+            return compute_classification_metrics(
+                labels.cpu().numpy(), y_pred=y_pred, y_score=y_score
+            )
         elif problem_type == "multilabel_classification":
             y_score = torch.sigmoid(logits).cpu().numpy()
             y_pred = (y_score >= 0.5).astype("i4")
-            return compute_classification_metrics(labels.cpu().numpy(), y_pred=y_pred, y_score=y_score)
+            return compute_classification_metrics(
+                labels.cpu().numpy(), y_pred=y_pred, y_score=y_score
+            )
         else:  # regression
             from sklearn.metrics import mean_squared_error
+
             preds = logits.squeeze(-1).cpu().numpy()
             labels = labels.cpu().numpy()
             return {"mse": float(mean_squared_error(labels, preds))}
+
     return _fn
 
 
@@ -325,7 +411,10 @@ def make_compute_metrics(problem_type: str = "single_label_classification"):
 # 主入口：组装配置 → 数据 → 训练器 → 训练/评估/保存
 # ------------------------------
 
-def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ()) -> Path:
+
+def run_from_configs(
+    config_paths: Sequence[str], overrides: Sequence[str] = ()
+) -> Path:
     """合并配置并运行训练。返回本次 run 的输出目录。"""
     # 1) 合并配置
     cfg: MutableMapping[str, Any] = {}
@@ -351,17 +440,24 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
 
     with log_context(run_id=str(run_id), stage="train", step=0):
         LOGGER.info("run_id=%s | 输出目录=%s", run_id, out_dir)
-        (out_dir / "configs_merged.yaml").write_text(yaml.safe_dump(dict(cfg), allow_unicode=True), encoding="utf-8")
+        (out_dir / "configs_merged.yaml").write_text(
+            yaml.safe_dump(dict(cfg), allow_unicode=True), encoding="utf-8"
+        )
 
         # 3) 随机性 & 设备
         try:
             from kan.utils.seed import set_seed
+
             seed = int(cfg.get("seed", 42))
             set_seed(seed, deterministic=bool(cfg.get("deterministic", True)))
         except Exception:
             seed = int(cfg.get("seed", 42))
             hf_set_seed(seed)
-        device = torch.device("cuda" if torch.cuda.is_available() and cfg.get("device", "cuda") == "cuda" else "cpu")
+        device = torch.device(
+            "cuda"
+            if torch.cuda.is_available() and cfg.get("device", "cuda") == "cuda"
+            else "cpu"
+        )
         LOGGER.info("device=%s cuda_available=%s", device, torch.cuda.is_available())
 
         # 4) 数据：加载 → 词表/批处理 → Dataset/Collator
@@ -373,25 +469,42 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
         # 预加载训练集以便构建词表
         train_records = loader.load_split(data_cfg.get("train_split", "train"))
         # 词表/批处理器（明确 CPU 上构建）
-        batcher = Batcher(BatcherConfig(
-            text=TextConfig(**(data_cfg.get("batcher", {}).get("text", {}))),
-            entity=EntityConfig(**(data_cfg.get("batcher", {}).get("entity", {}))),
-            context=ContextConfig(**(data_cfg.get("batcher", {}).get("context", {}))),
-            device="cpu",
-        ))
+        batcher = Batcher(
+            BatcherConfig(
+                text=TextConfig(**(data_cfg.get("batcher", {}).get("text", {}))),
+                entity=EntityConfig(**(data_cfg.get("batcher", {}).get("entity", {}))),
+                context=ContextConfig(
+                    **(data_cfg.get("batcher", {}).get("context", {}))
+                ),
+                device="cpu",
+            )
+        )
         batcher.build_vocabs(train_records)
         # Dataset & Collator
         collator = KANDataCollator(batcher)
         ds_train = RecordsDataset(train_records)
         split_valid = data_cfg.get("validation_split", "validation")
-        ds_valid = RecordsDataset(loader.load_split(split_valid)) if loader.has_split(split_valid) else None
+        ds_valid = (
+            RecordsDataset(loader.load_split(split_valid))
+            if loader.has_split(split_valid)
+            else None
+        )
         split_test = data_cfg.get("test_split", "test")
-        ds_test = RecordsDataset(loader.load_split(split_test)) if loader.has_split(split_test) else None
+        ds_test = (
+            RecordsDataset(loader.load_split(split_test))
+            if loader.has_split(split_test)
+            else None
+        )
 
         # 5) 构建组件并包成模型
         te, ee, ce, ne, ne2c, head = build_components(cfg)
         model = KANForNewsClassification(
-            text_encoder=te, entity_encoder=ee, context_encoder=ce, ne=ne, ne2c=ne2c, head=head,
+            text_encoder=te,
+            entity_encoder=ee,
+            context_encoder=ce,
+            ne=ne,
+            ne2c=ne2c,
+            head=head,
             use_q=bool(cfg.get("head", {}).get("use_q", True)),
             use_r=bool(cfg.get("head", {}).get("use_r", True)),
             num_labels=int(cfg.get("head", {}).get("num_labels", 2)),
@@ -408,9 +521,13 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
             do_eval=ds_valid is not None,
             evaluation_strategy=targs_dict.get("evaluation_strategy", "epoch"),
             per_device_train_batch_size=int(targs_dict.get("batch_size", 8)),
-            per_device_eval_batch_size=int(targs_dict.get("eval_batch_size", targs_dict.get("batch_size", 8))),
+            per_device_eval_batch_size=int(
+                targs_dict.get("eval_batch_size", targs_dict.get("batch_size", 8))
+            ),
             learning_rate=float(targs_dict.get("optimizer", {}).get("lr", 5e-5)),
-            weight_decay=float(targs_dict.get("optimizer", {}).get("weight_decay", 0.0)),
+            weight_decay=float(
+                targs_dict.get("optimizer", {}).get("weight_decay", 0.0)
+            ),
             num_train_epochs=float(targs_dict.get("max_epochs", 3)),
             gradient_accumulation_steps=int(targs_dict.get("grad_accum", 1)),
             logging_steps=int(targs_dict.get("logging", {}).get("every_n_steps", 50)),
@@ -419,12 +536,18 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
             fp16=bool(cfg.get("fp16", False)),
             bf16=bool(cfg.get("bf16", False)),
             seed=int(seed),
-            dataloader_num_workers=int(targs_dict.get("dataloader", {}).get("num_workers", 0)),  # Windows 友好
+            dataloader_num_workers=int(
+                targs_dict.get("dataloader", {}).get("num_workers", 0)
+            ),  # Windows 友好
             report_to=targs_dict.get("report_to", []),
         )
 
         # 7) Trainer
-        compute_metrics = make_compute_metrics(problem_type=cfg.get("head", {}).get("problem_type", "single_label_classification"))
+        compute_metrics = make_compute_metrics(
+            problem_type=cfg.get("head", {}).get(
+                "problem_type", "single_label_classification"
+            )
+        )
         trainer = Trainer(
             model=model,
             args=targs,
@@ -436,7 +559,10 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
 
         # 8) 训练
         train_result = trainer.train()
-        (out_dir / "train_metrics.json").write_text(json.dumps(train_result.metrics, indent=2, ensure_ascii=False), encoding="utf-8")
+        (out_dir / "train_metrics.json").write_text(
+            json.dumps(train_result.metrics, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
         trainer.save_model()  # 保存权重
 
         # 9) 评估（valid/test）与预测持久化
@@ -444,15 +570,36 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
             if dataset is None:
                 return
             metrics = trainer.evaluate(dataset=dataset)
-            (out_dir / f"eval_{name}.json").write_text(json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8")
+            (out_dir / f"eval_{name}.json").write_text(
+                json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
             # 预测分数与标签
             preds = trainer.predict(dataset)
-            logits = preds.predictions if not isinstance(preds.predictions, (list, tuple)) else preds.predictions[0]
+            logits = (
+                preds.predictions
+                if not isinstance(preds.predictions, (list, tuple))
+                else preds.predictions[0]
+            )
             y_score = torch.softmax(torch.tensor(logits), dim=-1).tolist()
             y_pred = torch.tensor(y_score).argmax(dim=-1).tolist()
-            y_true = preds.label_ids.tolist() if isinstance(preds.label_ids, (list, tuple)) else preds.label_ids
-            rows = [{"y_true": int(y_true[i]), "y_pred": int(y_pred[i]), "y_score": y_score[i]} for i in range(len(y_pred))]
-            (out_dir / f"pred_{name}.jsonl").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
+            y_true = (
+                preds.label_ids.tolist()
+                if isinstance(preds.label_ids, (list, tuple))
+                else preds.label_ids
+            )
+            rows = [
+                {
+                    "y_true": int(y_true[i]),
+                    "y_pred": int(y_pred[i]),
+                    "y_score": y_score[i],
+                }
+                for i in range(len(y_pred))
+            ]
+            (out_dir / f"pred_{name}.jsonl").write_text(
+                "\n".join(json.dumps(r, ensure_ascii=False) for r in rows),
+                encoding="utf-8",
+            )
+
         _eval_and_save("validation", ds_valid)
         _eval_and_save("test", ds_test)
 
@@ -464,10 +611,23 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
 # CLI 入口（供 scripts/ 调用，亦可直接运行）
 # ------------------------------
 
+
 def build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Train KAN with 🤗 Trainer (pipeline)")
-    p.add_argument("-c", "--config", nargs="+", required=True, help="YAML 配置文件列表，后者覆盖前者")
-    p.add_argument("-o", "--override", nargs="*", default=[], help="点号覆盖，如 head.num_labels=2 optimizer.lr=3e-5")
+    p.add_argument(
+        "-c",
+        "--config",
+        nargs="+",
+        required=True,
+        help="YAML 配置文件列表，后者覆盖前者",
+    )
+    p.add_argument(
+        "-o",
+        "--override",
+        nargs="*",
+        default=[],
+        help="点号覆盖，如 head.num_labels=2 optimizer.lr=3e-5",
+    )
     return p
 
 

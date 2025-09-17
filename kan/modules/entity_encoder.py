@@ -126,14 +126,18 @@ class EntityEncoder(nn.Module):
         self.cfg = cfg
 
         # ---- Embedding table ----
-        self.emb = nn.Embedding(cfg.vocab_size, cfg.embedding_dim, padding_idx=cfg.padding_idx)
+        self.emb = nn.Embedding(
+            cfg.vocab_size, cfg.embedding_dim, padding_idx=cfg.padding_idx
+        )
         if cfg.embeddings_path:
             self._load_pretrained(Path(cfg.embeddings_path))
         self.emb.weight.requires_grad = bool(cfg.trainable)
 
         # ---- Positional encoding for set/sequence over E ----
         # 这里采用可学习位置向量（对实体序列维度 E）；如果不需要，影响也接近恒等
-        self.pos_entity = nn.Embedding(1024, cfg.embedding_dim)  # 支持至多 1024 个实体/样本
+        self.pos_entity = nn.Embedding(
+            1024, cfg.embedding_dim
+        )  # 支持至多 1024 个实体/样本
 
         # ---- Transformer for entities ----
         self.ent_encoder = self._maybe_build_encoder()
@@ -144,7 +148,11 @@ class EntityEncoder(nn.Module):
 
         logger.info(
             "EntityEncoder init: vocab=%d, D=%d, trainable=%s, layers=%d, heads=%d",
-            cfg.vocab_size, cfg.embedding_dim, cfg.trainable, cfg.xformer_layers, cfg.xformer_heads
+            cfg.vocab_size,
+            cfg.embedding_dim,
+            cfg.trainable,
+            cfg.xformer_layers,
+            cfg.xformer_heads,
         )
 
     # ----------------------------- Forward -----------------------------
@@ -161,7 +169,9 @@ class EntityEncoder(nn.Module):
 
         # -------- Entities --------
         B, E = entity_ids.shape
-        ent_mask = self._ensure_mask(entity_mask, entity_ids != cfg.padding_idx)  # [B,E]
+        ent_mask = self._ensure_mask(
+            entity_mask, entity_ids != cfg.padding_idx
+        )  # [B,E]
         ent_tok = self.emb(entity_ids)  # [B,E,D]
         ent_tok = ent_tok + self.pos_entity(torch.arange(E, device=device))[None, :, :]
         ent_tok = self.dropout(ent_tok)
@@ -171,7 +181,9 @@ class EntityEncoder(nn.Module):
             ent_last = self.ent_encoder(ent_tok, src_key_padding_mask=(ent_mask == 0))
         else:
             ent_last = ent_tok
-        ent_pooled = self._pool_over_len(ent_last, ent_mask, mode=cfg.entity_pooling)  # [B,D]
+        ent_pooled = self._pool_over_len(
+            ent_last, ent_mask, mode=cfg.entity_pooling
+        )  # [B,D]
 
         # -------- Contexts (neighbors per entity) --------
         ctx_last: Tensor
@@ -183,17 +195,21 @@ class EntityEncoder(nn.Module):
             ctx_emb_raw = self.emb(context_ids)  # [B,E,Lc,D]
             raw_ctx_last = ctx_emb_raw if cfg.return_raw_contexts else None
             if context_mask is None:
-                context_mask = (context_ids != cfg.padding_idx)
+                context_mask = context_ids != cfg.padding_idx
 
             # inner pooling over Lc -> [B,E,D]
-            ctx_vec = self._pool_over_Lc(ctx_emb_raw, context_mask, mode=cfg.context_inner_pooling)
+            ctx_vec = self._pool_over_Lc(
+                ctx_emb_raw, context_mask, mode=cfg.context_inner_pooling
+            )
             ctx_vec = self.dropout(ctx_vec)
 
             # contexts mask over E：某实体若无任何有效邻居，则置 0
             ctx_has = (context_mask.long().sum(dim=-1) > 0).long()  # [B,E]
 
             if self.ctx_encoder is not None:
-                ctx_last = self.ctx_encoder(ctx_vec, src_key_padding_mask=(ctx_has == 0))  # [B,E,D]
+                ctx_last = self.ctx_encoder(
+                    ctx_vec, src_key_padding_mask=(ctx_has == 0)
+                )  # [B,E,D]
             else:
                 ctx_last = ctx_vec
             ctx_mask_over_E = ctx_has
@@ -202,7 +218,9 @@ class EntityEncoder(nn.Module):
             ctx_last = torch.zeros_like(ent_last)
             ctx_mask_over_E = torch.zeros_like(ent_mask)
 
-        ctx_pooled = self._pool_over_len(ctx_last, ctx_mask_over_E, mode=cfg.entity_pooling)
+        ctx_pooled = self._pool_over_len(
+            ctx_last, ctx_mask_over_E, mode=cfg.entity_pooling
+        )
 
         out = {
             "entities_last_hidden": ent_last,
@@ -219,7 +237,10 @@ class EntityEncoder(nn.Module):
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "shapes: ent_last=%s, ent_pooled=%s, ctx_last=%s, ctx_pooled=%s",
-                tuple(ent_last.shape), tuple(ent_pooled.shape), tuple(ctx_last.shape), tuple(ctx_pooled.shape)
+                tuple(ent_last.shape),
+                tuple(ent_pooled.shape),
+                tuple(ctx_last.shape),
+                tuple(ctx_pooled.shape),
             )
         return out
 
@@ -252,7 +273,9 @@ class EntityEncoder(nn.Module):
         )
         return nn.TransformerEncoder(layer, num_layers=cfg.xformer_layers)
 
-    def _pool_over_len(self, x: Tensor, mask: Tensor, *, mode: Literal["mean", "max"]) -> Tensor:
+    def _pool_over_len(
+        self, x: Tensor, mask: Tensor, *, mode: Literal["mean", "max"]
+    ) -> Tensor:
         """跨长度维度（实体维 E）做聚合，mask=1 有效。
         x: [B,E,D], mask: [B,E] -> [B,D]
         """
@@ -267,7 +290,9 @@ class EntityEncoder(nn.Module):
         else:
             raise ValueError(f"未知的 pooling 策略: {mode}")
 
-    def _pool_over_Lc(self, x: Tensor, mask: Tensor, *, mode: Literal["mean", "max"]) -> Tensor:
+    def _pool_over_Lc(
+        self, x: Tensor, mask: Tensor, *, mode: Literal["mean", "max"]
+    ) -> Tensor:
         """对 Lc 维（邻居）聚合到每个实体一个向量。
         x: [B,E,Lc,D], mask: [B,E,Lc] -> [B,E,D]
         """
@@ -297,6 +322,7 @@ class EntityEncoder(nn.Module):
             raise FileNotFoundError(f"预训练向量文件不存在: {path}")
         if path.suffix.lower() == ".npy":
             import numpy as np  # 延迟依赖
+
             arr = np.load(path)
             wt = torch.tensor(arr, dtype=self.emb.weight.dtype)
         else:
@@ -310,14 +336,18 @@ class EntityEncoder(nn.Module):
                     wt = obj["embeddings"]
                 else:
                     # 取第一个张量型值
-                    val = next((v for v in obj.values() if isinstance(v, torch.Tensor)), None)
+                    val = next(
+                        (v for v in obj.values() if isinstance(v, torch.Tensor)), None
+                    )
                     if val is None:
                         raise ValueError("无法从 state_dict 中找到权重张量")
                     wt = val
             else:
                 raise ValueError("不支持的预训练权重文件格式")
         if wt.shape != self.emb.weight.shape:
-            raise ValueError(f"预训练形状不匹配: got {tuple(wt.shape)} expect {tuple(self.emb.weight.shape)}")
+            raise ValueError(
+                f"预训练形状不匹配: got {tuple(wt.shape)} expect {tuple(self.emb.weight.shape)}"
+            )
         with torch.no_grad():
             self.emb.weight.copy_(wt)
         logger.info("Loaded pretrained entity embeddings from %s", path)
@@ -326,6 +356,7 @@ class EntityEncoder(nn.Module):
 # -----------------------------------------------------------------------------
 # Factory Helper
 # -----------------------------------------------------------------------------
+
 
 def build_entity_encoder(cfg: EntityEncoderConfig) -> EntityEncoder:
     enc = EntityEncoder(cfg)
@@ -343,7 +374,9 @@ def build_entity_encoder(cfg: EntityEncoderConfig) -> EntityEncoder:
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":  # pragma: no cover
     logging.basicConfig(level=logging.INFO)
-    cfg = EntityEncoderConfig(vocab_size=1000, embedding_dim=128, xformer_layers=1, xformer_heads=4)
+    cfg = EntityEncoderConfig(
+        vocab_size=1000, embedding_dim=128, xformer_layers=1, xformer_heads=4
+    )
     enc = build_entity_encoder(cfg)
     B, E, Lc = 2, 5, 7
     entity_ids = torch.randint(low=1, high=cfg.vocab_size, size=(B, E))

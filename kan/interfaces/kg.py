@@ -18,13 +18,24 @@ from __future__ import annotations
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple, runtime_checkable
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    runtime_checkable,
+)
 
 
 # ----------------------------- Type Aliases -----------------------------
-EntityID = str      # e.g., "Q76"
-RelationID = str    # e.g., "P31"
-Lang = str          # e.g., "en", "zh"
+EntityID = str  # e.g., "Q76"
+RelationID = str  # e.g., "P31"
+Lang = str  # e.g., "en", "zh"
 
 
 # ----------------------------- Data Models -----------------------------
@@ -34,6 +45,7 @@ class KGNode:
     @zh 知识图谱节点（实体）。
     @en Knowledge graph node (entity).
     """
+
     id: EntityID
     label: Optional[str] = None
     types: Tuple[EntityID, ...] = ()
@@ -46,6 +58,7 @@ class KGRelation:
     @zh 知识图谱关系（谓词）。
     @en Knowledge graph relation (predicate).
     """
+
     id: RelationID
     label: Optional[str] = None
     extra: Mapping[str, Any] = field(default_factory=dict)
@@ -57,6 +70,7 @@ class KGEdge:
     @zh 有向/无向边（取决于实现）；用于需要保留关系信息的场景。
     @en Edge (directed or not depending on implementation).
     """
+
     src: EntityID
     rel: RelationID
     dst: EntityID
@@ -67,11 +81,13 @@ class KGEdge:
 # ----------------------------- Exceptions ------------------------------
 class KGError(RuntimeError):
     """Base error for KG access."""
+
     pass
 
 
 class KGNotFound(KGError):
     """Raised when an entity is not found in KG."""
+
     pass
 
 

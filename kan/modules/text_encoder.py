@@ -56,7 +56,12 @@ except Exception as e:  # pragma: no cover - 清晰错误提示
     ) from e
 
 try:
-    from transformers import AutoModel, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
+    from transformers import (
+        AutoModel,
+        AutoTokenizer,
+        PreTrainedModel,
+        PreTrainedTokenizerBase,
+    )
 except Exception as e:  # pragma: no cover
     raise RuntimeError(
         "Transformers 未安装或导入失败，请先安装 transformers。/ transformers is missing."
@@ -117,8 +122,14 @@ class BaseTextEncoder(nn.Module):
         raise NotImplementedError
 
     @torch.no_grad()
-    def encode(self, texts: List[str], *, device: Optional[torch.device | str] = None,
-               batch_size: int = 32, progress: bool = False) -> torch.Tensor:
+    def encode(
+        self,
+        texts: List[str],
+        *,
+        device: Optional[torch.device | str] = None,
+        batch_size: int = 32,
+        progress: bool = False,
+    ) -> torch.Tensor:
         """端到端：原文 → pooled embedding（B, H）/ Texts to pooled embeddings.
 
         Parameters
@@ -150,12 +161,19 @@ class HFTextEncoder(BaseTextEncoder):
     torch.Size([2, 768])
     """
 
-    def __init__(self, model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase, cfg: TextEncoderConfig):
+    def __init__(
+        self,
+        model: PreTrainedModel,
+        tokenizer: PreTrainedTokenizerBase,
+        cfg: TextEncoderConfig,
+    ):
         super().__init__()
         self.model = model
         self.tokenizer = tokenizer
         self.cfg = cfg
-        self.hidden_size = getattr(model.config, "hidden_size", None) or getattr(model.config, "d_model", None)
+        self.hidden_size = getattr(model.config, "hidden_size", None) or getattr(
+            model.config, "d_model", None
+        )
 
         # 冻结与否
         for p in self.model.parameters():
@@ -163,16 +181,25 @@ class HFTextEncoder(BaseTextEncoder):
 
         logger.info(
             "Initialized HFTextEncoder: model=%s, hidden_size=%s, trainable=%s, pooling=%s",
-            type(self.model).__name__, self.hidden_size, cfg.trainable, cfg.pooling,
+            type(self.model).__name__,
+            self.hidden_size,
+            cfg.trainable,
+            cfg.pooling,
         )
 
     # -------------------------- Factory --------------------------
     @classmethod
-    def from_pretrained(cls, cfg: TextEncoderConfig, *, trust_remote_code: bool = False) -> "HFTextEncoder":
+    def from_pretrained(
+        cls, cfg: TextEncoderConfig, *, trust_remote_code: bool = False
+    ) -> "HFTextEncoder":
         tokenizer = AutoTokenizer.from_pretrained(
-            cfg.model_name_or_path, use_fast=cfg.use_fast_tokenizer, trust_remote_code=trust_remote_code
+            cfg.model_name_or_path,
+            use_fast=cfg.use_fast_tokenizer,
+            trust_remote_code=trust_remote_code,
         )
-        model = AutoModel.from_pretrained(cfg.model_name_or_path, trust_remote_code=trust_remote_code)
+        model = AutoModel.from_pretrained(
+            cfg.model_name_or_path, trust_remote_code=trust_remote_code
+        )
         return cls(model=model, tokenizer=tokenizer, cfg=cfg)
 
     # ----------------------- Tokenization ------------------------
@@ -222,8 +249,14 @@ class HFTextEncoder(BaseTextEncoder):
 
     # --------------------------- API ----------------------------
     @torch.no_grad()
-    def encode(self, texts: List[str], *, device: Optional[torch.device | str] = None,
-               batch_size: int = 32, progress: bool = False) -> torch.Tensor:  # type: ignore[override]
+    def encode(
+        self,
+        texts: List[str],
+        *,
+        device: Optional[torch.device | str] = None,
+        batch_size: int = 32,
+        progress: bool = False,
+    ) -> torch.Tensor:  # type: ignore[override]
         device = device or self._auto_device()
         self.eval()
         pooled_list: List[Tensor] = []
@@ -231,13 +264,16 @@ class HFTextEncoder(BaseTextEncoder):
         total = len(texts)
         rng = range(0, total, batch_size)
         for i in rng:
-            sub = texts[i:i + batch_size]
+            sub = texts[i : i + batch_size]
             batch = self.batch_encode(sub, device=device)
             out = self(**batch)
             pooled_list.append(out["pooled_output"].detach().cpu())
             if progress:
                 pct = min(100, int((i + len(sub)) * 100 / max(1, total)))
-                print(f"[TextEncoder] progress: {pct:3d}% ({i + len(sub)}/{total})", end="\r")
+                print(
+                    f"[TextEncoder] progress: {pct:3d}% ({i + len(sub)}/{total})",
+                    end="\r",
+                )
         if progress:
             print()
         return torch.cat(pooled_list, dim=0)
@@ -248,7 +284,9 @@ class HFTextEncoder(BaseTextEncoder):
             return torch.device("cuda")
         return torch.device("cpu")
 
-    def _pool(self, sequence_output: Tensor, attention_mask: Optional[Tensor]) -> Tensor:
+    def _pool(
+        self, sequence_output: Tensor, attention_mask: Optional[Tensor]
+    ) -> Tensor:
         """根据配置进行聚合 / Pooling by configuration.
 
         - cls: 取位置 0 的表示；若模型没有明确 CLS 语义（如某些 RoBERTa 变体），仍按索引 0 取值。
@@ -259,7 +297,9 @@ class HFTextEncoder(BaseTextEncoder):
         if pooling == "cls":
             return sequence_output[:, 0]
         if attention_mask is None:
-            raise ValueError("mean/max pooling 需要 attention_mask / attention_mask required for mean/max pooling")
+            raise ValueError(
+                "mean/max pooling 需要 attention_mask / attention_mask required for mean/max pooling"
+            )
 
         mask = attention_mask.unsqueeze(-1).type_as(sequence_output)  # (B, L, 1)
         if pooling == "mean":
@@ -277,7 +317,9 @@ class HFTextEncoder(BaseTextEncoder):
 # -----------------------------------------------------------------------------
 # Factory Helper
 # -----------------------------------------------------------------------------
-def build_text_encoder(cfg: TextEncoderConfig, *, trust_remote_code: bool = False) -> HFTextEncoder:
+def build_text_encoder(
+    cfg: TextEncoderConfig, *, trust_remote_code: bool = False
+) -> HFTextEncoder:
     """根据配置构建文本编码器 / Build text encoder from config.
 
     Notes / 说明
@@ -295,8 +337,13 @@ def build_text_encoder(cfg: TextEncoderConfig, *, trust_remote_code: bool = Fals
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":  # pragma: no cover
     logging.basicConfig(level=logging.INFO)
-    cfg = TextEncoderConfig(model_name_or_path="prajjwal1/bert-tiny", max_length=32, pooling="mean")
+    cfg = TextEncoderConfig(
+        model_name_or_path="prajjwal1/bert-tiny", max_length=32, pooling="mean"
+    )
     enc = build_text_encoder(cfg)
-    texts = ["Hello world!", "Knowledge-aware Attention Network (KAN) for Fake News Detection."]
+    texts = [
+        "Hello world!",
+        "Knowledge-aware Attention Network (KAN) for Fake News Detection.",
+    ]
     vec = enc.encode(texts, batch_size=2, progress=True)
     print("Embeddings:", vec.shape)

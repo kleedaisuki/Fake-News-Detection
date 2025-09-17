@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
 """
 @file   kan/data/batcher.py
 @brief  Collate KAN NewsRecord into tensors for Text/Entity/Context branches.
@@ -46,11 +47,12 @@ except Exception:  # pragma: no cover
 
 # Project schema --------------------------------------------------------------
 from kan.data.loaders import NewsRecord
-from kan.modules.vectorizer import BaseVectorizer, VectorizerConfig, build_vectorizer
+from kan.data.vectorizer import BaseVectorizer, VectorizerConfig, build_vectorizer
 
 # =============================================================================
 # Vocabularies (Entity / Property)
 # =============================================================================
+
 
 class EntityVocab:
     """Bidirectional mapping for entity QIDs.
@@ -59,6 +61,7 @@ class EntityVocab:
       0: <PAD>
       1: <UNK>
     """
+
     PAD = 0
     UNK = 1
 
@@ -92,6 +95,7 @@ class PropertyVocab:
       0: <PAD>
       1: <NONE>   # when neighbor has no explicit property
     """
+
     PAD = 0
     NONE = 1
 
@@ -122,10 +126,11 @@ class PropertyVocab:
 # Config
 # =============================================================================
 
+
 @dataclass
 class TextConfig:
     tokenizer_backend: Optional[str] = "hf"  # 'hf' or None
-    tokenizer_name: Optional[str] = None     # e.g., 'bert-base-uncased'
+    tokenizer_name: Optional[str] = None  # e.g., 'bert-base-uncased'
     max_length: int = 256
     pad_to_max: bool = True
     truncation: bool = True
@@ -142,7 +147,7 @@ class EntityConfig:
 @dataclass
 class ContextConfig:
     max_neighbors: int = 32  # per entity
-    keep_properties: bool = True   # whether to carry relation property ids
+    keep_properties: bool = True  # whether to carry relation property ids
 
 
 @dataclass
@@ -156,6 +161,7 @@ class BatcherConfig:
 # =============================================================================
 # Batcher
 # =============================================================================
+
 
 class Batcher:
     """Batcher to collate NewsRecord list into tensors for encoders/attention.
@@ -172,11 +178,14 @@ class Batcher:
       - ctx_mask: torch.BoolTensor  [B, E, N]
     """
 
-    def __init__(self, cfg: BatcherConfig,
-                 entity_vocab: Optional[EntityVocab] = None,
-                 property_vocab: Optional[PropertyVocab] = None,
-                 tokenizer: Optional[Any] = None,
-                 vectorizer: Optional[BaseVectorizer] = None) -> None:
+    def __init__(
+        self,
+        cfg: BatcherConfig,
+        entity_vocab: Optional[EntityVocab] = None,
+        property_vocab: Optional[PropertyVocab] = None,
+        tokenizer: Optional[Any] = None,
+        vectorizer: Optional[BaseVectorizer] = None,
+    ) -> None:
         if torch is None:
             raise RuntimeError("Batcher requires 'torch'. Please install PyTorch.")
         self.cfg = cfg
@@ -186,15 +195,24 @@ class Batcher:
         self.tokenizer = tokenizer
         self.vectorizer = vectorizer
         # Lazy init tokenizer/vectorizer if configs provided
-        if self.tokenizer is None and cfg.text.tokenizer_backend == "hf" and cfg.text.tokenizer_name:
+        if (
+            self.tokenizer is None
+            and cfg.text.tokenizer_backend == "hf"
+            and cfg.text.tokenizer_name
+        ):
             if AutoTokenizer is None:
-                raise RuntimeError("HuggingFace tokenizer requested but 'transformers' not installed.")
+                raise RuntimeError(
+                    "HuggingFace tokenizer requested but 'transformers' not installed."
+                )
             self.tokenizer = AutoTokenizer.from_pretrained(cfg.text.tokenizer_name)
         if self.vectorizer is None and cfg.text.vectorizer is not None:
             self.vectorizer = build_vectorizer(cfg.text.vectorizer)
-        LOGGER.info("Batcher ready: device=%s, tok=%s, vec=%s", self.device,
-                    getattr(self.tokenizer, "__class__", type(None)).__name__,
-                    getattr(self.vectorizer, "__class__", type(None)).__name__)
+        LOGGER.info(
+            "Batcher ready: device=%s, tok=%s, vec=%s",
+            self.device,
+            getattr(self.tokenizer, "__class__", type(None)).__name__,
+            getattr(self.vectorizer, "__class__", type(None)).__name__,
+        )
 
     # ---------------------------------------------------------------------
     # Vocabulary utilities
@@ -203,7 +221,7 @@ class Batcher:
         """Populate entity/property vocabs from a corpus (usually training split)."""
         for rec in records:
             # entities
-            for q in (rec.entities or []):
+            for q in rec.entities or []:
                 if q and isinstance(q, str):
                     self.entity_vocab.add(q)
             # contexts
@@ -229,11 +247,13 @@ class Batcher:
 
         # Text tokenization -------------------------------------------------
         if self.tokenizer is not None:
-            tok = self.tokenizer(texts,
-                                 padding=("max_length" if self.cfg.text.pad_to_max else True),
-                                 truncation=self.cfg.text.truncation,
-                                 max_length=self.cfg.text.max_length,
-                                 return_tensors="pt")
+            tok = self.tokenizer(
+                texts,
+                padding=("max_length" if self.cfg.text.pad_to_max else True),
+                truncation=self.cfg.text.truncation,
+                max_length=self.cfg.text.max_length,
+                return_tensors="pt",
+            )
             text_tok = {
                 "input_ids": tok["input_ids"].to(self.device),
                 "attention_mask": tok["attention_mask"].to(self.device),
@@ -249,12 +269,18 @@ class Batcher:
 
         # Entities ----------------------------------------------------------
         E = self.cfg.entity.max_entities
-        ent_ids = torch.full((B, E), fill_value=EntityVocab.PAD, dtype=torch.long, device=self.device)
+        ent_ids = torch.full(
+            (B, E), fill_value=EntityVocab.PAD, dtype=torch.long, device=self.device
+        )
         ent_mask = torch.zeros((B, E), dtype=torch.bool, device=self.device)
         # for contexts construction per batch
         batch_entities: List[List[str]] = []
         for i, rec in enumerate(records):
-            ents = [q for q in (rec.entities or []) if isinstance(q, str) and q.startswith("Q")]
+            ents = [
+                q
+                for q in (rec.entities or [])
+                if isinstance(q, str) and q.startswith("Q")
+            ]
             if len(ents) > E:
                 ents = ents[:E]
             batch_entities.append(ents)
@@ -265,11 +291,18 @@ class Batcher:
 
         # Contexts ----------------------------------------------------------
         N = self.cfg.context.max_neighbors
-        ctx_ids = torch.full((B, E, N), fill_value=EntityVocab.PAD, dtype=torch.long, device=self.device)
+        ctx_ids = torch.full(
+            (B, E, N), fill_value=EntityVocab.PAD, dtype=torch.long, device=self.device
+        )
         ctx_mask = torch.zeros((B, E, N), dtype=torch.bool, device=self.device)
         ctx_prop: Optional[Tensor] = None
         if self.cfg.context.keep_properties:
-            ctx_prop = torch.full((B, E, N), fill_value=PropertyVocab.PAD, dtype=torch.long, device=self.device)
+            ctx_prop = torch.full(
+                (B, E, N),
+                fill_value=PropertyVocab.PAD,
+                dtype=torch.long,
+                device=self.device,
+            )
         for i, rec in enumerate(records):
             # build map for quick access; if contexts missing, try defaults
             cdict = rec.contexts or {}
@@ -301,6 +334,7 @@ class Batcher:
 # =============================================================================
 # Utilities
 # =============================================================================
+
 
 def _parse_neighbor(item: Any) -> Tuple[Optional[str], Optional[str]]:
     """Parse neighbor spec which may be:
