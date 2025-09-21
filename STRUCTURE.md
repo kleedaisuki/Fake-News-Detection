@@ -75,8 +75,8 @@
 
 # 项目文件/文档结构
 
-```
-/
+```plain text
+./
 ├─ README.md                        # 快速开始（数据、缓存、训练、评估）
 ├─ STRUCTURE.md
 ├─ configs/
@@ -139,11 +139,45 @@
 │     ├─ kg.py                      # Protocol/ABC：KG 抽取接口
 │     └─ encoders.py                # Protocol/ABC：三类编码器接口
 ├─ scripts/                         # 调用 prepare_data + train + eval
-│  ├─ README.md
-│  └─ run.py
-├─ cache/                           # 实体与邻居缓存（按数据集/日期分桶）
-├─ runs/                            # 日志与权重输出
-├─ tests/                           # 单测（batch 形状/注意力 Q,K,V 对齐等）
+│  └─ datasets/
+│     ├─ README.md
+|     ├─ configs/                     # 数据集配置文件目录
+|     |     ├─ base.yaml
+|     |     └─ ...
+│     └─ acquire_datasets.py   
+├─ datasets/
+│  └─ <name>/
+│       ├─ raw/                     # 原始下载物（zip/tar/json/csv/...）
+│       ├─ extracted/               # 解压后的原始文件树
+│       ├─ processed/               # 规范化后的文件（parquet/csv/jsonl）
+│       └─ dataset_card.json
+├─ cache/                               # 过程缓存（可复用）
+│  ├─ datasets/<name>/<fingerprint>/
+│  │  ├─ raw/                           # 原始镜像（*.jsonl.gz，可选）
+│  │  ├─ prepared/<split>/              # 清洗/增强后的分片
+│  │  │  ├─ shard-00001.jsonl.gz
+│  │  │  └─ stats.json
+│  │  ├─ meta/vocabs/                   # 词表（batcher 持久化）
+│  │  └─ manifest.json                  # 可消费清单（见 §2.5）
+│  └─ kg/                               # 知识抓取缓存（由 kg_fetcher 实现）
+├─ runs/
+│  ├─ <run_id>/
+│  │  ├─ configs_merged.yaml            # 最终配置快照（可复现）
+│  │  ├─ logs/                          # 训练/准备/评估日志
+│  │  ├─ artifacts/                     # 训练权重与断点
+│  │  │  ├─ best/                       # 最优（按 metric_for_best）
+│  │  │  └─ last/                       # 最近一次
+│  │  ├─ eval_*.json                    # 训练阶段评估指标（Trainer 版）
+│  │  ├─ pred_<split>.jsonl             # 预测结果（给 evaluate 聚合）
+│  │  └─ ...
+│  └─ <eval_run_id>/
+│     ├─ configs_merged.yaml
+│     ├─ logs/
+│     └─ reports/
+│        ├─ metrics_<split>.json        # micro & macro 汇总
+│        ├─ confusion_matrix_<split>.csv
+│        └─ curves/<split>/{roc,pr}_class<i>.csv
+├─ tests/                               # 单测（batch 形状/注意力 Q,K,V 对齐等）
 ├─ LICENSES/
 │  └─ ...
 ├─ .gitignore

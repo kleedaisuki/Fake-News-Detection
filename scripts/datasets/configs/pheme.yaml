@@ -1,0 +1,13 @@
+schema_version: 1
+name: pheme
+source: external  # 因为 HF 上未确认可用版本
+hf_id: null
+license: 根据 PHEME 数据集原始许可（查看 Figshare 等处）  
+provenance:
+  homepage: https://figshare.com/articles/dataset/PHEME_dataset_of_rumours_and_non-rumours/4010619
+  paper: “PHEME： Rumour Dataset” 等原始出处
+tags: [rumour-detection, social-media, twitter]
+notes: |
+  PHEME 数据集在 HF 上未发现可直接 load 的版本。  
+  原始数据在 Figshare / Kaggle 等处可获取，文件格式可能是 CSV /其它；  
+  若要用在当前项目中，需要下载原始数据并转换格式以兼容 datasets 库的新版本。
