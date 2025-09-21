@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kan"
+version = "0.1.0"
+description = "Knowledge-aware Attention Network (KAN) for Fake News Detection"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0" }
+authors = [{ name = "kleedaisuki", email = "kleedaisuki@outlook.com" }]
+
+# TODO: 把真正“运行期必须”的依赖放进来；开发工具不要放这里
+dependencies = [
+  "torch==2.8.0+cu128",
+  "torchvision==0.23.0+cu128",
+  "torchaudio==2.8.0+cu128",
+  "transformers==4.56.1",
+  "tokenizers==0.22.0",
+  "sentencepiece==0.2.1",
+  "safetensors==0.6.2",
+  "accelerate==1.10.1",
+  "datasets==4.0.0",
+  "evaluate==0.4.5",
+  "pandas==2.3.2",
+  "numpy==2.3.3",
+  "scikit-learn==1.7.2",
+  "scipy==1.16.2",
+  "pyarrow==21.0.0",
+  "fsspec==2025.3.0",
+  "huggingface-hub==0.34.4",
+  "requests==2.32.5",
+  "tqdm==4.67.1",
+  "typing_extensions==4.15.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov", "ruff", "mypy"]
+
+[tool.setuptools]
+package-dir = { "" = "." }   # 非 src 布局：从项目根找包
+license-files = ["LICENSE*"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["kan*"]
+exclude = ["tests*", "datasets*", "data*", "notebooks*", "scripts*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
+pythonpath = []       # 不注入额外路径，强制通过“安装后导入”
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+strict = false

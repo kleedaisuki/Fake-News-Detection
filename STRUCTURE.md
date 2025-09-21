@@ -76,7 +76,7 @@
 # 项目文件/文档结构
 
 ```plain text
-./
+/
 ├─ README.md                        # 快速开始（数据、缓存、训练、评估）
 ├─ STRUCTURE.md
 ├─ configs/
@@ -104,7 +104,9 @@
 │     ├─ gossipcop_5fold.yaml
 │     └─ pheme_5fold.yaml
 ├─ kan/
+│  ├─ __init__.py 
 │  ├─ data/
+│  │  ├─ __init__.py 
 │  │  ├─ README.md
 │  │  ├─ loaders.py                 # NewsLoader：统一输出 schema
 │  │  ├─ entity_linking.py          # EntityLinker 抽象；TagMe/EL 实现
@@ -112,44 +114,53 @@
 │  │  ├─ vectorizer.py              # word2vec/可学习嵌入/缓存
 │  │  └─ batcher.py                 # BatchBuilder：三路输入打包
 │  ├─ modules/
+│  │  ├─ __init__.py 
 │  │  ├─ README.md
 │  │  ├─ text_encoder.py            # TransformerEncoder(1L) → p
 │  │  ├─ entity_encoder.py          # TransformerEncoder(1L) → q'
 │  │  ├─ context_encoder.py         # TransformerEncoder(1L) → r'
 │  │  ├─ attention/
+│  │  │  ├─ __init__.py 
 │  │  │  ├─ README.md
 │  │  │  ├─ ne.py                   # Q(p),K(q'),V(q') → q
 │  │  │  └─ ne2c.py                 # Q(p),K(q'),V(r') → r
 │  │  └─ head.py                    # concat([p,q,r]) → logits
 │  ├─ pipelines/
+│  │  ├─ __init__.py 
 │  │  ├─ README.md
 │  │  ├─ prepare_data.py            # 实体链接+一跳邻居抓取+缓存/去重
 │  │  ├─ train_trainer.py           # transformers.Trainer 流
 │  │  ├─ train_accelerate.py        # accelerate 自定义 loop
 │  │  └─ evaluate.py                # 指标与交叉验证驱动
 │  ├─ utils/
+│  │  ├─ __init__.py 
 │  │  ├─ README.md
 │  │  ├─ registry.py                # 组件注册/依赖注入
 │  │  ├─ logging.py                 # 训练/评测日志
 │  │  ├─ metrics.py                 # P/R/F1/Acc/AUC 计算
 │  │  └─ seed.py                    # 可复现性工具
 │  └─ interfaces/
+│     ├─ __init__.py 
 │     ├─ README.md
 │     ├─ linker.py                  # Protocol/ABC：EL 接口
 │     ├─ kg.py                      # Protocol/ABC：KG 抽取接口
 │     └─ encoders.py                # Protocol/ABC：三类编码器接口
 ├─ scripts/                         # 调用 prepare_data + train + eval
+│  ├─ install/                      # 安装 kan 包脚本
+│  │  ├─ install-dev.ps1
+│  │  └─ install-dev.sh
 │  └─ datasets/
 │     ├─ README.md
-|     ├─ configs/                     # 数据集配置文件目录
-|     |     ├─ base.yaml
-|     |     └─ ...
+│     ├─ configs/                     # 数据集配置文件目录
+│     │     ├─ base.yaml
+│     │     └─ ...
 │     └─ acquire_datasets.py   
+├─ pyproject.toml                       # kan 包配置
 ├─ datasets/
 │  └─ <name>/
-│       ├─ raw/                     # 原始下载物（zip/tar/json/csv/...）
-│       ├─ extracted/               # 解压后的原始文件树
-│       ├─ processed/               # 规范化后的文件（parquet/csv/jsonl）
+│       ├─ raw/                         # 原始下载物（zip/tar/json/csv/...）
+│       ├─ extracted/                   # 解压后的原始文件树
+│       ├─ processed/                   # 规范化后的文件（parquet/csv/jsonl）
 │       └─ dataset_card.json
 ├─ cache/                               # 过程缓存（可复用）
 │  ├─ datasets/<name>/<fingerprint>/
@@ -178,6 +189,7 @@
 │        ├─ confusion_matrix_<split>.csv
 │        └─ curves/<split>/{roc,pr}_class<i>.csv
 ├─ tests/                               # 单测（batch 形状/注意力 Q,K,V 对齐等）
+│
 ├─ LICENSES/
 │  └─ ...
 ├─ .gitignore
