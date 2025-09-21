@@ -90,14 +90,16 @@ class HeadConfig:
     """
 
     num_labels: int = 2
-    problem_type: Literal['single_label_classification','multi_label_classification','regression'] = 'single_label_classification'
+    problem_type: Literal[
+        "single_label_classification", "multi_label_classification", "regression"
+    ] = "single_label_classification"
     use_p: bool = True
     use_q: bool = True
     use_r: bool = True
-    fusion: Literal['concat','sum','mean'] = 'concat'
+    fusion: Literal["concat", "sum", "mean"] = "concat"
     proj_dim: Optional[int] = None
     hidden_sizes: List[int] = field(default_factory=lambda: [256])
-    activation: Literal['relu','gelu'] = 'gelu'
+    activation: Literal["relu", "gelu"] = "gelu"
     dropout: float = 0.1
     layernorm: bool = True
     label_smoothing: float = 0.0
@@ -121,9 +123,21 @@ class Head(nn.Module):
         self.cfg = cfg
 
         # 分支投影（lazy），仅在对应分支启用时生效
-        self.proj_p = nn.LazyLinear(cfg.proj_dim) if (cfg.proj_dim and cfg.use_p) else nn.Identity()
-        self.proj_q = nn.LazyLinear(cfg.proj_dim) if (cfg.proj_dim and cfg.use_q) else nn.Identity()
-        self.proj_r = nn.LazyLinear(cfg.proj_dim) if (cfg.proj_dim and cfg.use_r) else nn.Identity()
+        self.proj_p = (
+            nn.LazyLinear(cfg.proj_dim)
+            if (cfg.proj_dim and cfg.use_p)
+            else nn.Identity()
+        )
+        self.proj_q = (
+            nn.LazyLinear(cfg.proj_dim)
+            if (cfg.proj_dim and cfg.use_q)
+            else nn.Identity()
+        )
+        self.proj_r = (
+            nn.LazyLinear(cfg.proj_dim)
+            if (cfg.proj_dim and cfg.use_r)
+            else nn.Identity()
+        )
 
         # 融合后 LayerNorm（延迟初始化，见 forward）
         self._post_fuse_ln: Optional[nn.LayerNorm] = None
@@ -136,17 +150,21 @@ class Head(nn.Module):
             # 首层到 hidden_sizes[0]
             layers.append(nn.LazyLinear(cfg.hidden_sizes[0], bias=cfg.bias))
             for i in range(len(cfg.hidden_sizes) - 1):
-                layers.extend([
+                layers.extend(
+                    [
+                        self._activation_layer(cfg.activation),
+                        nn.Dropout(cfg.dropout),
+                        nn.LazyLinear(cfg.hidden_sizes[i + 1], bias=cfg.bias),
+                    ]
+                )
+            # 输出层
+            layers.extend(
+                [
                     self._activation_layer(cfg.activation),
                     nn.Dropout(cfg.dropout),
-                    nn.LazyLinear(cfg.hidden_sizes[i+1], bias=cfg.bias),
-                ])
-            # 输出层
-            layers.extend([
-                self._activation_layer(cfg.activation),
-                nn.Dropout(cfg.dropout),
-                nn.LazyLinear(cfg.num_labels, bias=cfg.bias),
-            ])
+                    nn.LazyLinear(cfg.num_labels, bias=cfg.bias),
+                ]
+            )
         self.mlp = nn.Sequential(*layers)
         self.dropout = nn.Dropout(cfg.dropout)
 
@@ -155,7 +173,13 @@ class Head(nn.Module):
 
         logger.info(
             "Head init: problem=%s, fusion=%s, proj_dim=%s, hidden=%s, use=[p:%s q:%s r:%s]",
-            cfg.problem_type, cfg.fusion, cfg.proj_dim, cfg.hidden_sizes, cfg.use_p, cfg.use_q, cfg.use_r,
+            cfg.problem_type,
+            cfg.fusion,
+            cfg.proj_dim,
+            cfg.hidden_sizes,
+            cfg.use_p,
+            cfg.use_q,
+            cfg.use_r,
         )
 
     # ----------------------------- Forward -----------------------------
@@ -186,15 +210,17 @@ class Head(nn.Module):
             raise ValueError("Head 至少需要一个输入分支（p/q/r）")
 
         # 融合
-        if cfg.fusion == 'concat':
+        if cfg.fusion == "concat":
             fused = torch.cat(feats, dim=-1)
-        elif cfg.fusion in ('sum', 'mean'):
+        elif cfg.fusion in ("sum", "mean"):
             # 为安全起见，确保它们最后维度一致（通常通过 proj_dim 保证）
             last_dims = {int(t.shape[-1]) for t in feats}
             if len(last_dims) != 1:
-                raise ValueError("sum/mean 融合要求各分支最后维度一致；请设置 proj_dim 或手动对齐")
+                raise ValueError(
+                    "sum/mean 融合要求各分支最后维度一致；请设置 proj_dim 或手动对齐"
+                )
             stacked = torch.stack(feats, dim=0)  # [K,B,D]
-            fused = stacked.sum(dim=0) if cfg.fusion == 'sum' else stacked.mean(dim=0)
+            fused = stacked.sum(dim=0) if cfg.fusion == "sum" else stacked.mean(dim=0)
         else:
             raise ValueError(f"未知的 fusion 策略: {cfg.fusion}")
 
@@ -213,9 +239,11 @@ class Head(nn.Module):
 
         # 训练：计算损失
         if labels is not None:
-            if cfg.problem_type == 'single_label_classification':
+            if cfg.problem_type == "single_label_classification":
                 if self._ce_weight is None and cfg.class_weights is not None:
-                    w = torch.tensor(cfg.class_weights, dtype=logits.dtype, device=logits.device)
+                    w = torch.tensor(
+                        cfg.class_weights, dtype=logits.dtype, device=logits.device
+                    )
                     self._ce_weight = w
                 loss = F.cross_entropy(
                     logits,
@@ -223,10 +251,10 @@ class Head(nn.Module):
                     weight=self._ce_weight,
                     label_smoothing=cfg.label_smoothing,
                 )
-            elif cfg.problem_type == 'multi_label_classification':
+            elif cfg.problem_type == "multi_label_classification":
                 # labels 形状 [B, C]，数值 0/1 或任意概率
                 loss = F.binary_cross_entropy_with_logits(logits, labels.float())
-            elif cfg.problem_type == 'regression':
+            elif cfg.problem_type == "regression":
                 # 若 num_labels==1，支持 [B] / [B,1] 两种标签形状
                 if cfg.num_labels == 1 and labels.dim() == 1:
                     loss = F.mse_loss(logits.squeeze(-1), labels.float())
@@ -237,7 +265,9 @@ class Head(nn.Module):
             out["loss"] = loss
 
         if logger.isEnabledFor(logging.DEBUG):
-            logger.debug("head: fused=%s, logits=%s", tuple(fused.shape), tuple(logits.shape))
+            logger.debug(
+                "head: fused=%s, logits=%s", tuple(fused.shape), tuple(logits.shape)
+            )
         return out
 
     # --------------------------- Helpers ---------------------------
@@ -246,10 +276,10 @@ class Head(nn.Module):
         return y
 
     @staticmethod
-    def _activation_layer(name: Literal['relu','gelu']) -> nn.Module:
-        if name == 'relu':
+    def _activation_layer(name: Literal["relu", "gelu"]) -> nn.Module:
+        if name == "relu":
             return nn.ReLU()
-        elif name == 'gelu':
+        elif name == "gelu":
             return nn.GELU()
         else:
             raise ValueError(f"未知的激活函数: {name}")
@@ -258,6 +288,7 @@ class Head(nn.Module):
 # -----------------------------------------------------------------------------
 # Factory
 # -----------------------------------------------------------------------------
+
 
 def build_head(cfg: HeadConfig) -> Head:
     head = Head(cfg)
@@ -270,11 +301,13 @@ def build_head(cfg: HeadConfig) -> Head:
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":  # pragma: no cover
     logging.basicConfig(level=logging.INFO)
-    cfg = HeadConfig(num_labels=2, fusion='concat', proj_dim=None, hidden_sizes=[128, 64])
+    cfg = HeadConfig(
+        num_labels=2, fusion="concat", proj_dim=None, hidden_sizes=[128, 64]
+    )
     head = build_head(cfg)
     B, Hp, Hq, Hr = 4, 768, 256, 256
     p = torch.randn(B, Hp)
     q = torch.randn(B, Hq)
     r = torch.randn(B, Hr)
     out = head(p=p, q=q, r=r, labels=torch.randint(0, 2, (B,)))
-    print(out['logits'].shape, out['loss'].item())
+    print(out["logits"].shape, out["loss"].item())

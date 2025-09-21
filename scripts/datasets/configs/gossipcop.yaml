@@ -1,0 +1,12 @@
+schema_version: 1
+name: gossipcop
+source: external  # 因为在 Hugging Face 上没有确认的版本
+hf_id: null
+license: 根据 GossipCop / FakeNewsNet 的许可  # 你需要查清楚
+provenance:
+  homepage: FakeNewsNet Github 或 GossipCop 数据页
+  paper: Shu et al., “FakeNewsNet： A Data Repository with News Content, Social Context and Dynamic Information” (arXiv:1809.01286)
+tags: [fake-news, entertainment, articles]
+notes: |
+  GossipCop 数据集在 FakeNewsNet 中被使用，但目前 Hugging Face 上未发现一个官方/parquet 格式的数据集可以直接 load。  
+  你可能需要从 FakeNewsNet 的原始 source 下载，转换为 parquet/arrow，再放到一个 HF dataset 或者本地使用。

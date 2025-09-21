@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
 """
 @file   kan/pipelines/train_accelerate.py
 @brief  Pipeline: 使用 Hugging Face Accelerate 自定义训练循环（替代 Trainer）。
@@ -29,7 +30,17 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 import torch
 import torch.nn as nn
@@ -47,7 +58,7 @@ except Exception as e:  # pragma: no cover
 try:
     from transformers import get_linear_schedule_with_warmup, set_seed as hf_set_seed
 except Exception as e:  # pragma: no cover
-    raise RuntimeError("缺少 transformers，请先安装。");
+    raise RuntimeError("缺少 transformers，请先安装。")
 
 try:
     import yaml  # type: ignore
@@ -60,23 +71,34 @@ except Exception as e:  # pragma: no cover
 try:
     from kan.utils.logging import configure_logging, log_context
     import logging
+
     LOGGER = logging.getLogger("kan.pipelines.train_accelerate")
 except Exception:
     import logging
-    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(name)s | %(message)s")
+
+    logging.basicConfig(
+        level=logging.INFO, format="[%(asctime)s] %(levelname)s %(name)s | %(message)s"
+    )
     LOGGER = logging.getLogger("kan.pipelines.train_accelerate")
+
     def configure_logging(*args, **kwargs):  # type: ignore
         pass
+
     from contextlib import contextmanager
+
     @contextmanager
     def log_context(**kwargs):  # type: ignore
         yield
+
 
 # ------------------------------
 # 配置合并与覆盖
 # ------------------------------
 
-def _deep_update(base: MutableMapping[str, Any], other: Mapping[str, Any]) -> MutableMapping[str, Any]:
+
+def _deep_update(
+    base: MutableMapping[str, Any], other: Mapping[str, Any]
+) -> MutableMapping[str, Any]:
     for k, v in other.items():
         if isinstance(v, Mapping) and isinstance(base.get(k), Mapping):
             _deep_update(base[k], v)  # type: ignore
@@ -107,6 +129,7 @@ def _apply_overrides(cfg: MutableMapping[str, Any], overrides: Sequence[str]) ->
             cur = cur[p]  # type: ignore
         cur[parts[-1]] = val_conv
 
+
 # ------------------------------
 # 复用 train_trainer 的轻量 Dataset/Collator/组合模型与装配函数
 # ------------------------------
@@ -119,33 +142,45 @@ try:
     )
 except Exception:
     # 兜底导入：若上游尚未可用，可在本文件临时提供极简实现或抛错
-    raise RuntimeError("需要 kan.pipelines.train_trainer 中的 RecordsDataset/KANDataCollator/KANForNewsClassification。")
+    raise RuntimeError(
+        "需要 kan.pipelines.train_trainer 中的 RecordsDataset/KANDataCollator/KANForNewsClassification。"
+    )
 
 # ------------------------------
 # 指标桥接
 # ------------------------------
 
+
 def make_compute_metrics(problem_type: str = "single_label_classification"):
     from kan.utils.metrics import compute_classification_metrics
+
     def _fn(logits: torch.Tensor, labels: torch.Tensor) -> Dict[str, float]:
         if problem_type == "single_label_classification":
             y_score = torch.softmax(logits, dim=-1).cpu().numpy()
             y_pred = y_score.argmax(axis=-1)
-            return compute_classification_metrics(labels.cpu().numpy(), y_pred=y_pred, y_score=y_score)
+            return compute_classification_metrics(
+                labels.cpu().numpy(), y_pred=y_pred, y_score=y_score
+            )
         elif problem_type == "multilabel_classification":
             y_score = torch.sigmoid(logits).cpu().numpy()
             y_pred = (y_score >= 0.5).astype("i4")
-            return compute_classification_metrics(labels.cpu().numpy(), y_pred=y_pred, y_score=y_score)
+            return compute_classification_metrics(
+                labels.cpu().numpy(), y_pred=y_pred, y_score=y_score
+            )
         else:  # regression
             from sklearn.metrics import mean_squared_error
+
             preds = logits.squeeze(-1).cpu().numpy()
             labels_np = labels.cpu().numpy()
             return {"mse": float(mean_squared_error(labels_np, preds))}
+
     return _fn
+
 
 # ------------------------------
 # 优化器 & 参数组
 # ------------------------------
+
 
 def build_optimizer(model: nn.Module, opt_cfg: Mapping[str, Any]):
     lr = float(opt_cfg.get("lr", 5e-5))
@@ -157,7 +192,10 @@ def build_optimizer(model: nn.Module, opt_cfg: Mapping[str, Any]):
     for n, p in model.named_parameters():
         if not p.requires_grad:
             continue
-        if any(x in n for x in ["bias", "LayerNorm.weight", "layer_norm.weight", "ln.weight"]):
+        if any(
+            x in n
+            for x in ["bias", "LayerNorm.weight", "layer_norm.weight", "ln.weight"]
+        ):
             no_decay.append(p)
         else:
             decay.append(p)
@@ -167,11 +205,20 @@ def build_optimizer(model: nn.Module, opt_cfg: Mapping[str, Any]):
     ]
     return torch.optim.AdamW(groups, lr=lr, betas=betas, eps=eps)
 
+
 # ------------------------------
 # 评估循环
 # ------------------------------
 
-def evaluate(accel: Accelerator, model: nn.Module, loader: DataLoader, compute_metrics, problem_type: str, num_labels: int) -> Tuple[Dict[str, float], torch.Tensor, torch.Tensor]:
+
+def evaluate(
+    accel: Accelerator,
+    model: nn.Module,
+    loader: DataLoader,
+    compute_metrics,
+    problem_type: str,
+    num_labels: int,
+) -> Tuple[Dict[str, float], torch.Tensor, torch.Tensor]:
     model.eval()
     all_logits, all_labels = [], []
     with torch.no_grad():
@@ -186,19 +233,27 @@ def evaluate(accel: Accelerator, model: nn.Module, loader: DataLoader, compute_m
             all_logits.append(logits.cpu())
             if labels is not None:
                 all_labels.append(labels.cpu())
-    logits_cat = torch.cat(all_logits, dim=0) if all_logits else torch.empty(0, num_labels)
-    labels_cat = torch.cat(all_labels, dim=0) if all_labels else torch.empty(0, dtype=torch.long)
+    logits_cat = (
+        torch.cat(all_logits, dim=0) if all_logits else torch.empty(0, num_labels)
+    )
+    labels_cat = (
+        torch.cat(all_labels, dim=0) if all_labels else torch.empty(0, dtype=torch.long)
+    )
     metrics: Dict[str, float] = {}
     if labels_cat.numel() > 0:
         metrics = compute_metrics(logits_cat, labels_cat)
     model.train()
     return metrics, logits_cat, labels_cat
 
+
 # ------------------------------
 # 主流程
 # ------------------------------
 
-def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ()) -> Path:
+
+def run_from_configs(
+    config_paths: Sequence[str], overrides: Sequence[str] = ()
+) -> Path:
     # 1) 配置合并
     cfg: MutableMapping[str, Any] = {}
     for p in config_paths:
@@ -220,12 +275,15 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
 
     with log_context(run_id=str(run_id), stage="train", step=0):
         LOGGER.info("run_id=%s | 输出目录=%s", run_id, out_dir)
-        (out_dir / "configs_merged.yaml").write_text(yaml.safe_dump(dict(cfg), allow_unicode=True), encoding="utf-8")
+        (out_dir / "configs_merged.yaml").write_text(
+            yaml.safe_dump(dict(cfg), allow_unicode=True), encoding="utf-8"
+        )
 
         # 3) 随机性
         seed = int(cfg.get("seed", 42))
         try:
             from kan.utils.seed import set_seed
+
             set_seed(seed, deterministic=bool(cfg.get("deterministic", True)))
         except Exception:
             hf_set_seed(seed)
@@ -239,34 +297,58 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
             mixed_precision = "fp16"
         grad_accum = int(train_cfg.get("grad_accum", 1))
         log_with = train_cfg.get("report_to", []) or None
-        accel = Accelerator(mixed_precision=mixed_precision, gradient_accumulation_steps=grad_accum, log_with=log_with)
+        accel = Accelerator(
+            mixed_precision=mixed_precision,
+            gradient_accumulation_steps=grad_accum,
+            log_with=log_with,
+        )
         if log_with:
-            accel.init_trackers(project_name=cfg.get("name", "kan"), config={"seed": seed, **train_cfg})
+            accel.init_trackers(
+                project_name=cfg.get("name", "kan"), config={"seed": seed, **train_cfg}
+            )
 
         device = accel.device
-        LOGGER.info("accelerator: %s | device=%s | mp=%s", accel.state.distributed_type, device, mixed_precision)
+        LOGGER.info(
+            "accelerator: %s | device=%s | mp=%s",
+            accel.state.distributed_type,
+            device,
+            mixed_precision,
+        )
 
         # 5) 数据
         from kan.data.loaders import loader_from_config  # type: ignore
         from kan.data.batcher import Batcher, BatcherConfig, TextConfig, EntityConfig, ContextConfig  # type: ignore
+
         data_cfg = cfg.get("data") or cfg
         loader = loader_from_config(data_cfg)
         train_records = loader.load_split(data_cfg.get("train_split", "train"))
         valid_split = data_cfg.get("validation_split", "validation")
         test_split = data_cfg.get("test_split", "test")
 
-        batcher = Batcher(BatcherConfig(
-            text=TextConfig(**(data_cfg.get("batcher", {}).get("text", {}))),
-            entity=EntityConfig(**(data_cfg.get("batcher", {}).get("entity", {}))),
-            context=ContextConfig(**(data_cfg.get("batcher", {}).get("context", {}))),
-            device="cpu",
-        ))
+        batcher = Batcher(
+            BatcherConfig(
+                text=TextConfig(**(data_cfg.get("batcher", {}).get("text", {}))),
+                entity=EntityConfig(**(data_cfg.get("batcher", {}).get("entity", {}))),
+                context=ContextConfig(
+                    **(data_cfg.get("batcher", {}).get("context", {}))
+                ),
+                device="cpu",
+            )
+        )
         batcher.build_vocabs(train_records)
         collator = KANDataCollator(batcher)
 
         ds_train = RecordsDataset(train_records)
-        ds_valid = RecordsDataset(loader.load_split(valid_split)) if hasattr(loader, "has_split") and loader.has_split(valid_split) else None
-        ds_test = RecordsDataset(loader.load_split(test_split)) if hasattr(loader, "has_split") and loader.has_split(test_split) else None
+        ds_valid = (
+            RecordsDataset(loader.load_split(valid_split))
+            if hasattr(loader, "has_split") and loader.has_split(valid_split)
+            else None
+        )
+        ds_test = (
+            RecordsDataset(loader.load_split(test_split))
+            if hasattr(loader, "has_split") and loader.has_split(test_split)
+            else None
+        )
 
         num_workers = int(train_cfg.get("dataloader", {}).get("num_workers", 0))
         batch_size = int(train_cfg.get("batch_size", 8))
@@ -274,14 +356,51 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
         drop_last = bool(train_cfg.get("dataloader", {}).get("drop_last", False))
         pin_memory = bool(train_cfg.get("dataloader", {}).get("pin_memory", True))
 
-        dl_train = DataLoader(ds_train, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory, drop_last=drop_last, collate_fn=collator)
-        dl_valid = DataLoader(ds_valid, batch_size=eval_bs, shuffle=False, num_workers=num_workers, pin_memory=pin_memory, drop_last=False, collate_fn=collator) if ds_valid is not None else None
-        dl_test = DataLoader(ds_test, batch_size=eval_bs, shuffle=False, num_workers=num_workers, pin_memory=pin_memory, drop_last=False, collate_fn=collator) if ds_test is not None else None
+        dl_train = DataLoader(
+            ds_train,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            drop_last=drop_last,
+            collate_fn=collator,
+        )
+        dl_valid = (
+            DataLoader(
+                ds_valid,
+                batch_size=eval_bs,
+                shuffle=False,
+                num_workers=num_workers,
+                pin_memory=pin_memory,
+                drop_last=False,
+                collate_fn=collator,
+            )
+            if ds_valid is not None
+            else None
+        )
+        dl_test = (
+            DataLoader(
+                ds_test,
+                batch_size=eval_bs,
+                shuffle=False,
+                num_workers=num_workers,
+                pin_memory=pin_memory,
+                drop_last=False,
+                collate_fn=collator,
+            )
+            if ds_test is not None
+            else None
+        )
 
         # 6) 组件与模型
         te, ee, ce, ne, ne2c, head = build_components(cfg)
         model = KANForNewsClassification(
-            text_encoder=te, entity_encoder=ee, context_encoder=ce, ne=ne, ne2c=ne2c, head=head,
+            text_encoder=te,
+            entity_encoder=ee,
+            context_encoder=ce,
+            ne=ne,
+            ne2c=ne2c,
+            head=head,
             use_q=bool(cfg.get("head", {}).get("use_q", True)),
             use_r=bool(cfg.get("head", {}).get("use_r", True)),
             num_labels=int(cfg.get("head", {}).get("num_labels", 2)),
@@ -303,8 +422,16 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
         max_epochs = float(train_cfg.get("max_epochs", 3))
         total_update_steps = math.ceil(len(dl_train) / grad_accum) * int(max_epochs)
         warmup = train_cfg.get("lr_scheduler", {}).get("warmup_ratio", 0.0)
-        warmup_steps = int(train_cfg.get("lr_scheduler", {}).get("warmup_steps", total_update_steps * warmup))
-        scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_update_steps)
+        warmup_steps = int(
+            train_cfg.get("lr_scheduler", {}).get(
+                "warmup_steps", total_update_steps * warmup
+            )
+        )
+        scheduler = get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=warmup_steps,
+            num_training_steps=total_update_steps,
+        )
         if dl_valid is not None and dl_test is not None:
             dl_valid, dl_test = rest  # type: ignore
         elif dl_valid is not None:
@@ -321,7 +448,11 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
                 LOGGER.info("从断点恢复：%s", ckpt_dir)
 
         # 10) 训练循环
-        compute_metrics = make_compute_metrics(problem_type=cfg.get("head", {}).get("problem_type", "single_label_classification"))
+        compute_metrics = make_compute_metrics(
+            problem_type=cfg.get("head", {}).get(
+                "problem_type", "single_label_classification"
+            )
+        )
         clip_norm = float(train_cfg.get("grad_clip_norm", 0.0))
         log_steps = int(train_cfg.get("logging", {}).get("every_n_steps", 50))
         eval_strategy = train_cfg.get("evaluation_strategy", "epoch")  # 或 "steps"
@@ -357,15 +488,47 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
                 # 日志
                 if accel.is_local_main_process and (global_step % log_steps == 0):
                     cur_lr = scheduler.get_last_lr()[0]
-                    LOGGER.info("epoch=%d step=%d/%d lr=%.3e loss=%.4f", epoch, step + 1, len(dl_train), cur_lr, float(loss))
+                    LOGGER.info(
+                        "epoch=%d step=%d/%d lr=%.3e loss=%.4f",
+                        epoch,
+                        step + 1,
+                        len(dl_train),
+                        cur_lr,
+                        float(loss),
+                    )
                 if log_with:
-                    accel.log({"train/loss": float(loss), "lr": scheduler.get_last_lr()[0], "epoch": epoch}, step=global_step)
+                    accel.log(
+                        {
+                            "train/loss": float(loss),
+                            "lr": scheduler.get_last_lr()[0],
+                            "epoch": epoch,
+                        },
+                        step=global_step,
+                    )
 
                 # 按步评估/保存
-                if eval_strategy == "steps" and dl_valid is not None and global_step % eval_steps == 0:
-                    metrics, logits_cat, labels_cat = evaluate(accel, model, dl_valid, compute_metrics, cfg.get("head", {}).get("problem_type", "single_label_classification"), int(cfg.get("head", {}).get("num_labels", 2)))
+                if (
+                    eval_strategy == "steps"
+                    and dl_valid is not None
+                    and global_step % eval_steps == 0
+                ):
+                    metrics, logits_cat, labels_cat = evaluate(
+                        accel,
+                        model,
+                        dl_valid,
+                        compute_metrics,
+                        cfg.get("head", {}).get(
+                            "problem_type", "single_label_classification"
+                        ),
+                        int(cfg.get("head", {}).get("num_labels", 2)),
+                    )
                     if accel.is_main_process:
-                        (out_dir / f"eval_validation@step{global_step}.json").write_text(json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8")
+                        (
+                            out_dir / f"eval_validation@step{global_step}.json"
+                        ).write_text(
+                            json.dumps(metrics, indent=2, ensure_ascii=False),
+                            encoding="utf-8",
+                        )
                     # 保存
                     if save_strategy == "steps" and accel.is_main_process:
                         ckpt_dir = artifacts_dir / f"ckpt-step{global_step}"
@@ -373,7 +536,14 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
                         accel.save_state(ckpt_dir)
                         # best 选择
                         cur = metrics.get(metric_for_best)
-                        if cur is not None and (best_score is None or (cur > best_score if greater_is_better else cur < best_score)):
+                        if cur is not None and (
+                            best_score is None
+                            or (
+                                cur > best_score
+                                if greater_is_better
+                                else cur < best_score
+                            )
+                        ):
                             best_score = cur
                             # 同步 best 目录
                             for p in best_dir.glob("*"):
@@ -383,14 +553,32 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
 
             # 每 epoch 评估
             if dl_valid is not None:
-                metrics, logits_cat, labels_cat = evaluate(accel, model, dl_valid, compute_metrics, cfg.get("head", {}).get("problem_type", "single_label_classification"), int(cfg.get("head", {}).get("num_labels", 2)))
+                metrics, logits_cat, labels_cat = evaluate(
+                    accel,
+                    model,
+                    dl_valid,
+                    compute_metrics,
+                    cfg.get("head", {}).get(
+                        "problem_type", "single_label_classification"
+                    ),
+                    int(cfg.get("head", {}).get("num_labels", 2)),
+                )
                 if accel.is_main_process:
-                    (out_dir / f"eval_validation@epoch{epoch}.json").write_text(json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8")
+                    (out_dir / f"eval_validation@epoch{epoch}.json").write_text(
+                        json.dumps(metrics, indent=2, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
                 if log_with:
-                    accel.log({**{f"val/{k}": v for k, v in metrics.items()}, "epoch": epoch}, step=global_step)
+                    accel.log(
+                        {**{f"val/{k}": v for k, v in metrics.items()}, "epoch": epoch},
+                        step=global_step,
+                    )
                 if accel.is_main_process:
                     cur = metrics.get(metric_for_best)
-                    if cur is not None and (best_score is None or (cur > best_score if greater_is_better else cur < best_score)):
+                    if cur is not None and (
+                        best_score is None
+                        or (cur > best_score if greater_is_better else cur < best_score)
+                    ):
                         best_score = cur
                         best_dir.mkdir(parents=True, exist_ok=True)
                         for p in best_dir.glob("*"):
@@ -410,7 +598,10 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
         def _save_preds(name: str, logits: torch.Tensor, labels: torch.Tensor):
             if logits.numel() == 0:
                 return
-            if cfg.get("head", {}).get("problem_type", "single_label_classification") == "single_label_classification":
+            if (
+                cfg.get("head", {}).get("problem_type", "single_label_classification")
+                == "single_label_classification"
+            ):
                 y_score = torch.softmax(logits, dim=-1).tolist()
                 y_pred = torch.tensor(y_score).argmax(dim=-1).tolist()
             elif cfg.get("head", {}).get("problem_type") == "multilabel_classification":
@@ -422,19 +613,46 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
             y_true = labels.tolist() if labels.numel() > 0 else []
             rows = []
             for i in range(len(y_pred)):
-                rows.append({"y_true": (int(y_true[i]) if y_true else None), "y_pred": y_pred[i], "y_score": y_score[i]})
-            (out_dir / f"pred_{name}.jsonl").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
+                rows.append(
+                    {
+                        "y_true": (int(y_true[i]) if y_true else None),
+                        "y_pred": y_pred[i],
+                        "y_score": y_score[i],
+                    }
+                )
+            (out_dir / f"pred_{name}.jsonl").write_text(
+                "\n".join(json.dumps(r, ensure_ascii=False) for r in rows),
+                encoding="utf-8",
+            )
 
         if dl_valid is not None:
-            metrics, logits_cat, labels_cat = evaluate(accel, model, dl_valid, compute_metrics, cfg.get("head", {}).get("problem_type", "single_label_classification"), int(cfg.get("head", {}).get("num_labels", 2)))
+            metrics, logits_cat, labels_cat = evaluate(
+                accel,
+                model,
+                dl_valid,
+                compute_metrics,
+                cfg.get("head", {}).get("problem_type", "single_label_classification"),
+                int(cfg.get("head", {}).get("num_labels", 2)),
+            )
             if accel.is_main_process:
-                (out_dir / f"eval_validation.json").write_text(json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8")
+                (out_dir / f"eval_validation.json").write_text(
+                    json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8"
+                )
                 _save_preds("validation", logits_cat, labels_cat)
 
         if dl_test is not None:
-            metrics, logits_cat, labels_cat = evaluate(accel, model, dl_test, compute_metrics, cfg.get("head", {}).get("problem_type", "single_label_classification"), int(cfg.get("head", {}).get("num_labels", 2)))
+            metrics, logits_cat, labels_cat = evaluate(
+                accel,
+                model,
+                dl_test,
+                compute_metrics,
+                cfg.get("head", {}).get("problem_type", "single_label_classification"),
+                int(cfg.get("head", {}).get("num_labels", 2)),
+            )
             if accel.is_main_process:
-                (out_dir / f"eval_test.json").write_text(json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8")
+                (out_dir / f"eval_test.json").write_text(
+                    json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8"
+                )
                 _save_preds("test", logits_cat, labels_cat)
 
         LOGGER.info("训练完成，输出位于：%s", out_dir)
@@ -442,14 +660,30 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
             accel.end_training()
         return out_dir
 
+
 # ------------------------------
 # CLI 入口
 # ------------------------------
 
+
 def build_argparser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Train KAN with HF Accelerate (custom loop)")
-    p.add_argument("-c", "--config", nargs="+", required=True, help="YAML 配置文件列表，后者覆盖前者")
-    p.add_argument("-o", "--override", nargs="*", default=[], help="点号覆盖，如 head.num_labels=2 train.optimizer.lr=3e-5")
+    p = argparse.ArgumentParser(
+        description="Train KAN with HF Accelerate (custom loop)"
+    )
+    p.add_argument(
+        "-c",
+        "--config",
+        nargs="+",
+        required=True,
+        help="YAML 配置文件列表，后者覆盖前者",
+    )
+    p.add_argument(
+        "-o",
+        "--override",
+        nargs="*",
+        default=[],
+        help="点号覆盖，如 head.num_labels=2 train.optimizer.lr=3e-5",
+    )
     return p
 
 

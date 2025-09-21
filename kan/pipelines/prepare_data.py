@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
 """
 @file   kan/pipelines/prepare_data.py
 @brief  Pipeline: 准备数据（下载/清洗/实体链接/知识抓取/向量化/词表）→ 产出可复用的数据缓存与清单。
@@ -23,7 +24,17 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 import torch
 
@@ -33,17 +44,25 @@ import torch
 try:
     from kan.utils.logging import configure_logging, log_context
     import logging
+
     LOGGER = logging.getLogger("kan.pipelines.prepare_data")
 except Exception:  # 兼容仓库尚未落位 `kan/utils/logging.py` 的情况
     import logging
-    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(name)s | %(message)s")
+
+    logging.basicConfig(
+        level=logging.INFO, format="[%(asctime)s] %(levelname)s %(name)s | %(message)s"
+    )
     LOGGER = logging.getLogger("kan.pipelines.prepare_data")
+
     def configure_logging(*args, **kwargs):  # type: ignore
         pass
+
     from contextlib import contextmanager
+
     @contextmanager
     def log_context(**kwargs):  # type: ignore
         yield
+
 
 # ------------------------------
 # YAML 合并与覆盖
@@ -54,7 +73,9 @@ except Exception as e:  # pragma: no cover
     raise RuntimeError("缺少 PyYAML，请 `pip install pyyaml`。") from e
 
 
-def _deep_update(base: MutableMapping[str, Any], other: Mapping[str, Any]) -> MutableMapping[str, Any]:
+def _deep_update(
+    base: MutableMapping[str, Any], other: Mapping[str, Any]
+) -> MutableMapping[str, Any]:
     for k, v in other.items():
         if isinstance(v, Mapping) and isinstance(base.get(k), Mapping):
             _deep_update(base[k], v)  # type: ignore
@@ -90,9 +111,12 @@ def _apply_overrides(cfg: MutableMapping[str, Any], overrides: Sequence[str]) ->
 # Utils
 # ------------------------------
 
+
 def _stable_fingerprint(obj: Any) -> str:
     """对 dict/list/标量做稳定 JSON 序列化后哈希，作为数据配置指纹。"""
-    b = json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    b = json.dumps(
+        obj, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
     return hashlib.sha1(b).hexdigest()[:16]
 
 
@@ -123,8 +147,10 @@ def _normalize_text(s: str) -> str:
 # 具体步骤的桥接：委托 kan.data.* 模块
 # ------------------------------
 
+
 def _build_loader(data_cfg: Mapping[str, Any]):
     from kan.data.loaders import loader_from_config  # type: ignore
+
     return loader_from_config(data_cfg)
 
 
@@ -133,11 +159,13 @@ def _build_entity_linker(el_cfg: Optional[Mapping[str, Any]]):
         return None
     try:
         from kan.utils.registry import HUB, build_from_config
+
         EL = HUB.get_or_create("entity_linker")
         return build_from_config(el_cfg, EL)
     except Exception:
         try:
             from kan.data.entity_linking import build_entity_linker  # type: ignore
+
             return build_entity_linker(el_cfg)
         except Exception:
             LOGGER.warning("未找到 entity_linker，实现缺失，将跳过 EL。")
@@ -149,11 +177,13 @@ def _build_kg_fetcher(kg_cfg: Optional[Mapping[str, Any]]):
         return None
     try:
         from kan.utils.registry import HUB, build_from_config
+
         KG = HUB.get_or_create("kg_fetcher")
         return build_from_config(kg_cfg, KG)
     except Exception:
         try:
             from kan.data.kg_fetcher import build_kg_fetcher  # type: ignore
+
             return build_kg_fetcher(kg_cfg)
         except Exception:
             LOGGER.warning("未找到 kg_fetcher，实现缺失，将跳过 KG 抓取。")
@@ -165,11 +195,13 @@ def _build_vectorizer(vec_cfg: Optional[Mapping[str, Any]]):
         return None
     try:
         from kan.utils.registry import HUB, build_from_config
+
         VEC = HUB.get_or_create("vectorizer")
         return build_from_config(vec_cfg, VEC)
     except Exception:
         try:
             from kan.data.vectorizer import build_vectorizer  # type: ignore
+
             return build_vectorizer(vec_cfg)
         except Exception:
             LOGGER.warning("未找到 vectorizer，实现缺失，将跳过向量化。")
@@ -179,6 +211,7 @@ def _build_vectorizer(vec_cfg: Optional[Mapping[str, Any]]):
 # ------------------------------
 # 统计信息（轻量）
 # ------------------------------
+
 
 def _compute_stats(records: List[Mapping[str, Any]]) -> Mapping[str, Any]:
     n = len(records)
@@ -192,10 +225,18 @@ def _compute_stats(records: List[Mapping[str, Any]]) -> Mapping[str, Any]:
         ents = r.get("entities") or []
         ent_counts.append(len(ents))
     import statistics as st
+
     return {
         "count": n,
-        "text_len": {"mean": float(st.mean(lens)), "median": float(st.median(lens)), "p95": float(sorted(lens)[int(0.95*n)-1])},
-        "entities": {"mean": float(st.mean(ent_counts)), "median": float(st.median(ent_counts))},
+        "text_len": {
+            "mean": float(st.mean(lens)),
+            "median": float(st.median(lens)),
+            "p95": float(sorted(lens)[int(0.95 * n) - 1]),
+        },
+        "entities": {
+            "mean": float(st.mean(ent_counts)),
+            "median": float(st.median(ent_counts)),
+        },
     }
 
 
@@ -203,7 +244,10 @@ def _compute_stats(records: List[Mapping[str, Any]]) -> Mapping[str, Any]:
 # 主流程：准备数据
 # ------------------------------
 
-def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = (), force: bool = False) -> Path:
+
+def run_from_configs(
+    config_paths: Sequence[str], overrides: Sequence[str] = (), force: bool = False
+) -> Path:
     """合并配置→准备数据→返回**可复用数据缓存**目录。"""
     # 1) 合并配置
     cfg: MutableMapping[str, Any] = {}
@@ -217,7 +261,14 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = (),
     name = data_cfg.get("name", "dataset")
     # 指纹仅由“影响数据内容”的字段组成，避免把纯训练参数搀进去
     fp_keys = data_cfg.get("fingerprint_keys") or [
-        "source", "splits", "preprocess", "entity_linking", "kg", "vectorizer", "filters", "normalize",
+        "source",
+        "splits",
+        "preprocess",
+        "entity_linking",
+        "kg",
+        "vectorizer",
+        "filters",
+        "normalize",
     ]
     content_for_fp = {k: data_cfg.get(k) for k in fp_keys}
     fingerprint = _stable_fingerprint(content_for_fp)
@@ -239,8 +290,13 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = (),
     with log_context(run_id=str(run_id), stage="prepare", step=0):
         LOGGER.info("dataset=%s fingerprint=%s cache=%s", name, fingerprint, ds_cache)
         # 保存合并配置快照
-        (out_dir / "configs_merged.yaml").write_text(yaml.safe_dump(dict(cfg), allow_unicode=True), encoding="utf-8")
-        (out_dir / "fingerprint.json").write_text(json.dumps({"fingerprint": fingerprint}, ensure_ascii=False, indent=2), encoding="utf-8")
+        (out_dir / "configs_merged.yaml").write_text(
+            yaml.safe_dump(dict(cfg), allow_unicode=True), encoding="utf-8"
+        )
+        (out_dir / "fingerprint.json").write_text(
+            json.dumps({"fingerprint": fingerprint}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
         manifest_path = ds_cache / "manifest.json"
         if manifest_path.exists() and not force:
@@ -249,7 +305,9 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = (),
 
         # 3) 加载原始数据
         loader = _build_loader(data_cfg)
-        available_splits = data_cfg.get("splits", {"train": "train", "validation": "validation", "test": "test"})
+        available_splits = data_cfg.get(
+            "splits", {"train": "train", "validation": "validation", "test": "test"}
+        )
 
         raw_dir = _ensure_dir(ds_cache / "raw")
         pre_dir = _ensure_dir(ds_cache / "prepared")
@@ -272,10 +330,14 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = (),
         def _dedup(records: List[Mapping[str, Any]]) -> List[Mapping[str, Any]]:
             seen = set()
             out = []
-            key = (data_cfg.get("dedup_key") or "id")
+            key = data_cfg.get("dedup_key") or "id"
             by_text = key == "__text__"
             for r in records:
-                k = _normalize_text(r.get("text") or r.get("content") or "") if by_text else (r.get(key) or _normalize_text(r.get("text") or ""))
+                k = (
+                    _normalize_text(r.get("text") or r.get("content") or "")
+                    if by_text
+                    else (r.get(key) or _normalize_text(r.get("text") or ""))
+                )
                 if not k or k in seen:
                     continue
                 seen.add(k)
@@ -284,7 +346,11 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = (),
 
         for split, recs in list(split_records.items()):
             before = len(recs)
-            recs = [r for r in recs if _normalize_text(r.get("text") or r.get("content") or "")]
+            recs = [
+                r
+                for r in recs
+                if _normalize_text(r.get("text") or r.get("content") or "")
+            ]
             recs = _dedup(recs)
             LOGGER.info("split=%s 清洗：%d → %d", split, before, len(recs))
             split_records[split] = recs
@@ -294,7 +360,9 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = (),
         if el is not None:
             for split, recs in split_records.items():
                 LOGGER.info("实体链接：split=%s, n=%d", split, len(recs))
-                recs = el.link(recs)  # 约定返回附加 `entities`: List[{'id':..., 'surface':..., 'offset':...}]
+                recs = el.link(
+                    recs
+                )  # 约定返回附加 `entities`: List[{'id':..., 'surface':..., 'offset':...}]
                 split_records[split] = recs
 
         # 6) 知识抓取（KG fetch）
@@ -304,7 +372,7 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = (),
             all_ent_ids: List[str] = []
             for recs in split_records.values():
                 for r in recs:
-                    for e in (r.get("entities") or []):
+                    for e in r.get("entities") or []:
                         eid = e.get("id") or e.get("kb_id") or e.get("wiki_id")
                         if eid:
                             all_ent_ids.append(str(eid))
@@ -318,18 +386,27 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = (),
         if vec is not None:
             for split, recs in split_records.items():
                 LOGGER.info("向量化：split=%s, n=%d", split, len(recs))
-                recs = vec.transform(recs)  # 约定附加诸如 'text_vec'/'ent_vecs'/'ctx_vecs'
+                recs = vec.transform(
+                    recs
+                )  # 约定附加诸如 'text_vec'/'ent_vecs'/'ctx_vecs'
                 split_records[split] = recs
 
         # 8) 词表与 batcher 配置（供下游复用）
         try:
             from kan.data.batcher import Batcher, BatcherConfig, TextConfig, EntityConfig, ContextConfig  # type: ignore
-            batcher = Batcher(BatcherConfig(
-                text=TextConfig(**(data_cfg.get("batcher", {}).get("text", {}))),
-                entity=EntityConfig(**(data_cfg.get("batcher", {}).get("entity", {}))),
-                context=ContextConfig(**(data_cfg.get("batcher", {}).get("context", {}))),
-                device="cpu",
-            ))
+
+            batcher = Batcher(
+                BatcherConfig(
+                    text=TextConfig(**(data_cfg.get("batcher", {}).get("text", {}))),
+                    entity=EntityConfig(
+                        **(data_cfg.get("batcher", {}).get("entity", {}))
+                    ),
+                    context=ContextConfig(
+                        **(data_cfg.get("batcher", {}).get("context", {}))
+                    ),
+                    device="cpu",
+                )
+            )
             # 使用 train split 构建词表（必要时也能支持 union 策略）
             if split_records.get("train"):
                 batcher.build_vocabs(split_records["train"])  # 内部可选择是否持久化
@@ -376,10 +453,25 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = (),
 # CLI 入口
 # ------------------------------
 
+
 def build_argparser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Prepare dataset pipeline: load→clean→EL→KG→vectorize→vocab→manifest")
-    p.add_argument("-c", "--config", nargs="+", required=True, help="YAML 配置文件列表，后者覆盖前者")
-    p.add_argument("-o", "--override", nargs="*", default=[], help="点号覆盖，如 data.save_raw=false vectorizer.type=...")
+    p = argparse.ArgumentParser(
+        description="Prepare dataset pipeline: load→clean→EL→KG→vectorize→vocab→manifest"
+    )
+    p.add_argument(
+        "-c",
+        "--config",
+        nargs="+",
+        required=True,
+        help="YAML 配置文件列表，后者覆盖前者",
+    )
+    p.add_argument(
+        "-o",
+        "--override",
+        nargs="*",
+        default=[],
+        help="点号覆盖，如 data.save_raw=false vectorizer.type=...",
+    )
     p.add_argument("--force", action="store_true", help="若数据缓存已存在也强制重建")
     return p
 

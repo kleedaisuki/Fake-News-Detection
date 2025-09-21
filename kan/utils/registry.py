@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
 """
 @file   kan/utils/registry.py
 @brief  Lightweight, typed, and logger-friendly registry for factories/components.
@@ -18,7 +19,22 @@ from __future__ import annotations
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Generic, Iterable, Iterator, List, Mapping, MutableMapping, Optional, Sequence, Tuple, TypeVar, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Generic,
+    Iterable,
+    Iterator,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Tuple,
+    TypeVar,
+    Union,
+)
 import importlib
 import inspect
 import logging
@@ -42,6 +58,7 @@ __all__ = [
 # Exceptions
 # -----------------------------------------------------------------------------
 
+
 class RegistryError(RuntimeError):
     """Errors raised by the registry.
 
@@ -52,6 +69,7 @@ class RegistryError(RuntimeError):
 # -----------------------------------------------------------------------------
 # Utilities
 # -----------------------------------------------------------------------------
+
 
 def _canonical(key: str, *, case_insensitive: bool) -> str:
     if not isinstance(key, str):
@@ -88,6 +106,7 @@ class Entry(Generic[T]):
 # -----------------------------------------------------------------------------
 # Registry
 # -----------------------------------------------------------------------------
+
 
 class Registry(Generic[T]):
     """A typed registry that stores factories/components.
@@ -175,7 +194,9 @@ class Registry(Generic[T]):
 
         def deco(obj: T) -> T:
             nm = key or _callable_name(obj)
-            self.add(nm, obj, alias=alias, override=override, metadata=dict(metadata or {}))
+            self.add(
+                nm, obj, alias=alias, override=override, metadata=dict(metadata or {})
+            )
             return obj
 
         return deco
@@ -190,9 +211,13 @@ class Registry(Generic[T]):
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> None:
         if self._frozen:
-            raise RegistryError(f"registry '{self._name}' is frozen; cannot add '{key}'")
+            raise RegistryError(
+                f"registry '{self._name}' is frozen; cannot add '{key}'"
+            )
 
-        override_flag = self._allow_override_default if override is None else bool(override)
+        override_flag = (
+            self._allow_override_default if override is None else bool(override)
+        )
         k = _canonical(key, case_insensitive=self._case_insensitive)
         with self._lock:
             if (k in self._items or k in self._alias_to_key) and not override_flag:
@@ -218,12 +243,19 @@ class Registry(Generic[T]):
                         f"alias '{a}' conflicts with existing key/alias in registry '{self._name}'"
                     )
 
-            entry = Entry[T](name=k, obj=obj, aliases=aliases, metadata=dict(metadata or {}))
+            entry = Entry[T](
+                name=k, obj=obj, aliases=aliases, metadata=dict(metadata or {})
+            )
             self._items[k] = entry
             for a in aliases:
                 self._alias_to_key[a] = k
 
-            LOGGER.debug("Registered '%s' into registry '%s' (aliases=%s)", key, self._name, aliases)
+            LOGGER.debug(
+                "Registered '%s' into registry '%s' (aliases=%s)",
+                key,
+                self._name,
+                aliases,
+            )
 
     def _remove_no_check(self, key: str) -> None:
         """Remove key or alias without policy checks (internal)."""
@@ -238,7 +270,9 @@ class Registry(Generic[T]):
 
     def remove(self, key: str) -> None:
         if self._frozen:
-            raise RegistryError(f"registry '{self._name}' is frozen; cannot remove '{key}'")
+            raise RegistryError(
+                f"registry '{self._name}' is frozen; cannot remove '{key}'"
+            )
         with self._lock:
             if key not in self:
                 raise RegistryError(f"key '{key}' not found in registry '{self._name}'")
@@ -258,7 +292,9 @@ class Registry(Generic[T]):
 
     def items(self) -> List[Tuple[str, T]]:
         with self._lock:
-            return [(k, e.obj) for k, e in sorted(self._items.items(), key=lambda kv: kv[0])]
+            return [
+                (k, e.obj) for k, e in sorted(self._items.items(), key=lambda kv: kv[0])
+            ]
 
     def entries(self) -> List[Entry[T]]:
         with self._lock:
@@ -325,7 +361,14 @@ class Registry(Generic[T]):
         return factory
 
     # ------------------------ import helper ------------------------
-    def load(self, dotted: str, *, register_as: Optional[str] = None, alias: Union[str, Sequence[str], None] = None, override: Optional[bool] = None) -> Entry[T]:
+    def load(
+        self,
+        dotted: str,
+        *,
+        register_as: Optional[str] = None,
+        alias: Union[str, Sequence[str], None] = None,
+        override: Optional[bool] = None,
+    ) -> Entry[T]:
         """Import a symbol by dotted path and register it.
 
         Supports `module:attr` (preferred) or `module.attr`.
@@ -350,6 +393,7 @@ class Registry(Generic[T]):
 # RegistryHub (namespaces)
 # -----------------------------------------------------------------------------
 
+
 class RegistryHub:
     """Manage multiple registries under namespaces.
 
@@ -362,7 +406,9 @@ class RegistryHub:
     ```
     """
 
-    def __init__(self, *, case_insensitive: bool = True, allow_override: bool = False) -> None:
+    def __init__(
+        self, *, case_insensitive: bool = True, allow_override: bool = False
+    ) -> None:
         self._registries: Dict[str, Registry[Any]] = {}
         self._case_insensitive = case_insensitive
         self._allow_override = allow_override
@@ -380,7 +426,11 @@ class RegistryHub:
         with self._lock:
             reg = self._registries.get(ns)
             if reg is None:
-                reg = Registry[Any](ns, case_insensitive=self._case_insensitive, allow_override=self._allow_override)
+                reg = Registry[Any](
+                    ns,
+                    case_insensitive=self._case_insensitive,
+                    allow_override=self._allow_override,
+                )
                 self._registries[ns] = reg
                 LOGGER.debug("Created registry namespace '%s'", ns)
             return reg
@@ -400,6 +450,7 @@ class RegistryHub:
 # -----------------------------------------------------------------------------
 # Builder helper
 # -----------------------------------------------------------------------------
+
 
 def build_from_config(
     cfg: Mapping[str, Any],
@@ -430,10 +481,20 @@ def build_from_config(
 # -----------------------------------------------------------------------------
 
 HUB = RegistryHub()
-HUB.ensure_defaults([
-    "text_encoder", "entity_encoder", "context_encoder", "head",
-    "attention", "loss", "optimizer", "scheduler", "dataset", "tokenizer",
-])
+HUB.ensure_defaults(
+    [
+        "text_encoder",
+        "entity_encoder",
+        "context_encoder",
+        "head",
+        "attention",
+        "loss",
+        "optimizer",
+        "scheduler",
+        "dataset",
+        "tokenizer",
+    ]
+)
 
 
 # -----------------------------------------------------------------------------
@@ -448,6 +509,7 @@ if __name__ == "__main__":  # pragma: no cover
     @MODELS.register("mlp", alias=["MLP"])  # noqa: E302
     class MLP:
         """A tiny demo model."""
+
         def __init__(self, hidden: int = 128):
             self.hidden = hidden
 

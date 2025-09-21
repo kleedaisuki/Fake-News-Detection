@@ -1,0 +1,12 @@
+schema_version: 1
+name: liar
+source: hf
+hf_id: liar
+license: CC BY-SA 3.0  # 根据 liar 的原始许可
+provenance:
+  homepage: https://www.cs.ucsb.edu/~william/data/liar_dataset.zip
+  paper: https://arxiv.org/abs/1705.00648
+tags: [fake-news, claims, short-statements]
+notes: |
+  “LIAR” 数据集原始由 PolitiFact 提供短声明 (statements)，手工标注。  
+  注意：datasets 库中的 script 格式已弃用；如果 hf 上没有新的 parquet/arrow 版本，可能需要自己转换或用旧版 datasets。

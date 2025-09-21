@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
 """
 @file   kan/pipelines/entity_linking.py
 @brief  Pluggable entity linking pipeline stage for KAN (knowledge-aware attention).
@@ -46,15 +47,20 @@ from kan.data.loaders import NewsRecord
 # Registry hub (optional at import time)
 try:
     from kan.utils.registry import HUB
+
     _EL_REG = HUB.get_or_create("entity_linker")
 except Exception:  # pragma: no cover - registry may be unavailable at import time
+
     class _DummyReg:
         def register(self, *_a, **_k):
             def deco(x):
                 return x
+
             return deco
+
         def get(self, *_a, **_k):
             return None
+
     _EL_REG = _DummyReg()  # type: ignore
 
 LOGGER = logging.getLogger("kan.pipelines.entity_linking")
@@ -63,16 +69,18 @@ LOGGER = logging.getLogger("kan.pipelines.entity_linking")
 # Data structures
 # -----------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class EntityMention:
     """A single entity mention (for traceability).
-    
+
     @zh
       - surface: 文本片段
       - start, end: 在原文中的字符偏移（半开区间）
       - qid: 选定的 Wikidata QID（若无可用则 None）
       - score: 置信度（0~1，后端定义）
     """
+
     surface: str
     start: int
     end: int
@@ -83,7 +91,7 @@ class EntityMention:
 @dataclass
 class ELConfig:
     """Entity Linking config (align with configs/pipelines/entity_linking.yaml).
-    
+
     @fields
       backend: 后端标识（dummy / tagme / wikipedia / custom...）
       language: 文本语种，影响后端与词表
@@ -96,6 +104,7 @@ class ELConfig:
       max_surface_len: 单次匹配的最大表面长度（词表匹配上限，默认 5 个词）
       api: 任意后端参数袋（如 TagMe token、endpoint 等）
     """
+
     backend: str = "dummy"
     language: str = "en"
     threshold: float = 0.0
@@ -115,6 +124,7 @@ class ELConfig:
 # Cache store (content-addressed by config+text)
 # -----------------------------------------------------------------------------
 
+
 class _Cache:
     def __init__(self, dir_: Optional[str], backend_sig: str) -> None:
         self.dir = Path(dir_) if dir_ else None
@@ -123,7 +133,9 @@ class _Cache:
             (self.dir).mkdir(parents=True, exist_ok=True)
 
     def _key(self, text: str) -> Path:
-        h = blake2b((self.backend_sig + "\n" + text).encode("utf-8"), digest_size=16).hexdigest()
+        h = blake2b(
+            (self.backend_sig + "\n" + text).encode("utf-8"), digest_size=16
+        ).hexdigest()
         assert self.dir is not None
         return self.dir / f"{h[:2]}" / f"{h}.json"
 
@@ -148,12 +160,15 @@ class _Cache:
         p = self._key(text)
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("w", encoding="utf-8") as f:
-            json.dump({"mentions": [asdict(m) for m in mentions]}, f, ensure_ascii=False)
+            json.dump(
+                {"mentions": [asdict(m) for m in mentions]}, f, ensure_ascii=False
+            )
 
 
 # -----------------------------------------------------------------------------
 # Base linker interface
 # -----------------------------------------------------------------------------
+
 
 class BaseLinker:
     name: str = "base"
@@ -169,6 +184,7 @@ class BaseLinker:
 # -----------------------------------------------------------------------------
 # Dummy gazetteer-based linker (zero dependency, CI-friendly)
 # -----------------------------------------------------------------------------
+
 
 @_EL_REG.register("dummy", alias=["lex", "gazetteer"])  # type: ignore[attr-defined]
 class DummyLinker(BaseLinker):
@@ -186,7 +202,11 @@ class DummyLinker(BaseLinker):
         # Normalize keys according to case setting
         if not cfg.case_sensitive:
             self.lex = {k.lower(): v for k, v in self.lex.items()}
-        LOGGER.info("DummyLinker loaded lexicon: %d entries (case_sensitive=%s)", len(self.lex), cfg.case_sensitive)
+        LOGGER.info(
+            "DummyLinker loaded lexicon: %d entries (case_sensitive=%s)",
+            len(self.lex),
+            cfg.case_sensitive,
+        )
 
     def link(self, text: str) -> List[EntityMention]:
         if not text:
@@ -217,7 +237,15 @@ class DummyLinker(BaseLinker):
                 key = surface if self.cfg.case_sensitive else surface.lower()
                 qid = self.lex.get(key)
                 if qid:
-                    mentions.append(EntityMention(surface=surface, start=s_start, end=s_end, qid=qid, score=1.0))
+                    mentions.append(
+                        EntityMention(
+                            surface=surface,
+                            start=s_start,
+                            end=s_end,
+                            qid=qid,
+                            score=1.0,
+                        )
+                    )
         # Deduplicate overlapping identical spans keeping first
         uniq = {}
         for m in mentions:
@@ -229,13 +257,16 @@ class DummyLinker(BaseLinker):
 # (Optional) Stubs for real-world backends (left unimplemented by default)
 # -----------------------------------------------------------------------------
 
+
 @_EL_REG.register("tagme")  # type: ignore[attr-defined]
 class TagMeLinker(BaseLinker):
     name = "tagme"
     version = "0"
 
     def link(self, text: str) -> List[EntityMention]:  # pragma: no cover - placeholder
-        raise NotImplementedError("TagMeLinker requires external API; implement in your environment.")
+        raise NotImplementedError(
+            "TagMeLinker requires external API; implement in your environment."
+        )
 
 
 @_EL_REG.register("wikipedia")  # type: ignore[attr-defined]
@@ -244,18 +275,22 @@ class WikipediaLinker(BaseLinker):
     version = "0"
 
     def link(self, text: str) -> List[EntityMention]:  # pragma: no cover - placeholder
-        raise NotImplementedError("WikipediaLinker requires local index or API; implement in your environment.")
+        raise NotImplementedError(
+            "WikipediaLinker requires local index or API; implement in your environment."
+        )
 
 
 # -----------------------------------------------------------------------------
 # Factory
 # -----------------------------------------------------------------------------
 
+
 def build_linker(cfg: ELConfig) -> BaseLinker:
     key = (cfg.backend or "dummy").lower()
     # Prefer registry lookup
     try:
         from kan.utils.registry import HUB
+
         reg = HUB.get_or_create("entity_linker")
         klass = reg.get(key)
         if klass is None:
@@ -276,7 +311,10 @@ def build_linker(cfg: ELConfig) -> BaseLinker:
 # Public pipeline function
 # -----------------------------------------------------------------------------
 
-def link_records(records: List[NewsRecord], cfg: ELConfig, *, inplace: Optional[bool] = None) -> List[NewsRecord]:
+
+def link_records(
+    records: List[NewsRecord], cfg: ELConfig, *, inplace: Optional[bool] = None
+) -> List[NewsRecord]:
     """Link entities for a batch of NewsRecord and return updated records.
 
     @params
@@ -293,15 +331,18 @@ def link_records(records: List[NewsRecord], cfg: ELConfig, *, inplace: Optional[
     linker = build_linker(cfg)
 
     # Compose backend signature for cache keying
-    backend_sig = json.dumps({
-        "backend": linker.__class__.__name__,
-        "version": getattr(linker, "version", "0"),
-        "language": cfg.language,
-        "threshold": cfg.threshold,
-        "lex_hash": _hash_file(cfg.lexicon_path) if cfg.lexicon_path else None,
-        "case_sensitive": cfg.case_sensitive,
-        "max_surface_len": cfg.max_surface_len,
-    }, sort_keys=True)
+    backend_sig = json.dumps(
+        {
+            "backend": linker.__class__.__name__,
+            "version": getattr(linker, "version", "0"),
+            "language": cfg.language,
+            "threshold": cfg.threshold,
+            "lex_hash": _hash_file(cfg.lexicon_path) if cfg.lexicon_path else None,
+            "case_sensitive": cfg.case_sensitive,
+            "max_surface_len": cfg.max_surface_len,
+        },
+        sort_keys=True,
+    )
 
     cache = _Cache(cfg.cache_dir, backend_sig)
 
@@ -327,22 +368,32 @@ def link_records(records: List[NewsRecord], cfg: ELConfig, *, inplace: Optional[
         # Traceability
         rec.meta = dict(rec.meta or {})
         rec.meta.setdefault("el", {})
-        rec.meta["el"].update({
-            "backend": linker.__class__.__name__,
-            "version": getattr(linker, "version", "0"),
-            "language": cfg.language,
-            "threshold": cfg.threshold,
-            "time": _now_iso(),
-            "mentions": [asdict(m) for m in mentions],
-        })
+        rec.meta["el"].update(
+            {
+                "backend": linker.__class__.__name__,
+                "version": getattr(linker, "version", "0"),
+                "language": cfg.language,
+                "threshold": cfg.threshold,
+                "time": _now_iso(),
+                "mentions": [asdict(m) for m in mentions],
+            }
+        )
 
-    LOGGER.info("EL done: records=%d, linked=%d, cache_hit=%d, backend=%s/%s", len(out), num_linked, num_cache_hit, linker.__class__.__name__, getattr(linker, "version", "0"))
+    LOGGER.info(
+        "EL done: records=%d, linked=%d, cache_hit=%d, backend=%s/%s",
+        len(out),
+        num_linked,
+        num_cache_hit,
+        linker.__class__.__name__,
+        getattr(linker, "version", "0"),
+    )
     return out
 
 
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()

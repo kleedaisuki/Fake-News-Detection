@@ -1,0 +1,12 @@
+schema_version: 1
+name: politifact
+source: hf
+hf_id: Jinyan1/PolitiFact
+license: 根据 Jinyan1/PolitiFact 数据页许可（例如 CC BY-NC 或者具体标注）  # 你去看 hf 页面标注
+provenance:
+  homepage: https://huggingface.co/datasets/Jinyan1/PolitiFact
+  paper: FakeNewsNet 或 PolitiFact 相关论文（例如 Shu et al., 2018）  
+tags: [fake-news, articles, fact-check]
+notes: |
+  PolitiFact 数据集在 Hugging Face 上的版本为 parquet 格式，来自 Jinyan1/PolitiFact。  
+  可直接 `load_dataset("Jinyan1/PolitiFact")` 使用。

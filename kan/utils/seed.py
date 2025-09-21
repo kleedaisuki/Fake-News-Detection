@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
 """
 @file   kan/utils/seed.py
 @brief  Reproducibility utilities: set global seeds, deterministic guards, and worker seeding.
@@ -30,6 +31,7 @@ LOGGER = logging.getLogger("kan.utils.seed")
 
 try:  # optional torch
     import torch
+
     _TORCH_AVAILABLE = True
 except Exception:  # pragma: no cover
     torch = None  # type: ignore
@@ -49,6 +51,7 @@ __all__ = [
 # -----------------------------------------------------------------------------
 # Small helpers
 # -----------------------------------------------------------------------------
+
 
 def _now_seed() -> int:
     # 32-bit range for broad compatibility with various APIs
@@ -71,6 +74,7 @@ def derive_seed(base_seed: int, *names: Any) -> int:
 # RNG state capture/restore
 # -----------------------------------------------------------------------------
 
+
 @dataclass
 class SeedState:
     """Snapshot of RNG states for Python/NumPy/Torch (CPU & CUDA)."""
@@ -88,12 +92,19 @@ def rng_state() -> SeedState:
     t_cuda = None
     if _TORCH_AVAILABLE:
         try:
-            t_cpu = torch.random.get_rng_state().clone().numpy().tobytes()  # bytes for portability
+            t_cpu = (
+                torch.random.get_rng_state().clone().numpy().tobytes()
+            )  # bytes for portability
             if torch.cuda.is_available():
-                t_cuda = tuple(st.clone().numpy().tobytes() for st in torch.cuda.get_rng_state_all())
+                t_cuda = tuple(
+                    st.clone().numpy().tobytes()
+                    for st in torch.cuda.get_rng_state_all()
+                )
         except Exception as e:  # pragma: no cover
             LOGGER.debug("torch rng_state capture failed: %s", e)
-    return SeedState(py_state=py, np_state=npst, torch_cpu_state=t_cpu, torch_cuda_states=t_cuda)
+    return SeedState(
+        py_state=py, np_state=npst, torch_cpu_state=t_cpu, torch_cuda_states=t_cuda
+    )
 
 
 def restore_rng_state(state: SeedState) -> None:
@@ -104,7 +115,10 @@ def restore_rng_state(state: SeedState) -> None:
             cpu = torch.frombuffer(bytearray(state.torch_cpu_state), dtype=torch.uint8)
             torch.random.set_rng_state(cpu)
             if state.torch_cuda_states is not None and torch.cuda.is_available():
-                cuda_states = [torch.frombuffer(bytearray(b), dtype=torch.uint8) for b in state.torch_cuda_states]
+                cuda_states = [
+                    torch.frombuffer(bytearray(b), dtype=torch.uint8)
+                    for b in state.torch_cuda_states
+                ]
                 torch.cuda.set_rng_state_all(cuda_states)
         except Exception as e:  # pragma: no cover
             LOGGER.debug("torch rng_state restore failed: %s", e)
@@ -113,6 +127,7 @@ def restore_rng_state(state: SeedState) -> None:
 # -----------------------------------------------------------------------------
 # Core API
 # -----------------------------------------------------------------------------
+
 
 def set_seed(
     seed: Optional[int] = None,
@@ -170,6 +185,7 @@ def set_seed(
                 # cuDNN flags
                 try:
                     import torch.backends.cudnn as cudnn
+
                     cudnn.deterministic = True
                     cudnn.benchmark = False
                     torch_info["cudnn_deterministic"] = True
@@ -181,7 +197,9 @@ def set_seed(
                 try:
                     # Setting this env var makes some GEMM paths deterministic on CUDA 10.2+
                     os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":16:8")
-                    torch_info["CUBLAS_WORKSPACE_CONFIG"] = os.environ["CUBLAS_WORKSPACE_CONFIG"]
+                    torch_info["CUBLAS_WORKSPACE_CONFIG"] = os.environ[
+                        "CUBLAS_WORKSPACE_CONFIG"
+                    ]
                 except Exception as e:  # pragma: no cover
                     LOGGER.debug("CUBLAS_WORKSPACE_CONFIG not set: %s", e)
         except Exception as e:  # pragma: no cover
@@ -227,12 +245,15 @@ def seed_worker(worker_id: int) -> None:
     np.random.seed(s_np)
     random.seed(s_py)
     # CUDA RNG per worker is handled by PyTorch via initial_seed()
-    LOGGER.debug("worker %d seeded (py=%d, np=%d, base=%d)", worker_id, s_py, s_np, base)
+    LOGGER.debug(
+        "worker %d seeded (py=%d, np=%d, base=%d)", worker_id, s_py, s_np, base
+    )
 
 
 # -----------------------------------------------------------------------------
 # Context manager for local determinism
 # -----------------------------------------------------------------------------
+
 
 class with_seed:
     """Context manager that temporarily sets global RNG to a fixed seed and restores later.
@@ -276,9 +297,14 @@ class with_seed:
 
 if __name__ == "__main__":  # pragma: no cover
     import argparse
+
     parser = argparse.ArgumentParser(description="KAN reproducibility helper")
-    parser.add_argument("--seed", type=int, default=None, help="seed to set (default: time-based)")
-    parser.add_argument("--no-det", action="store_true", help="disable deterministic toggles")
+    parser.add_argument(
+        "--seed", type=int, default=None, help="seed to set (default: time-based)"
+    )
+    parser.add_argument(
+        "--no-det", action="store_true", help="disable deterministic toggles"
+    )
     args = parser.parse_args()
 
     info = set_seed(args.seed, deterministic=(not args.no_det))

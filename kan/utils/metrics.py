@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
 """
 @file   kan/utils/metrics.py
 @brief  Classification metrics for KAN (Precision/Recall/F1/Accuracy/AUC, PR-AUC),
@@ -20,7 +21,18 @@ from __future__ import annotations
 """
 
 from dataclasses import dataclass, asdict
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple, Union
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import logging
 
@@ -29,6 +41,7 @@ from numpy.typing import ArrayLike
 
 try:
     import torch  # noqa: F401
+
     _TORCH_AVAILABLE = True
 except Exception:  # pragma: no cover
     _TORCH_AVAILABLE = False
@@ -59,8 +72,10 @@ __all__ = [
 # Task type inference
 # -----------------------------------------------------------------------------
 
+
 class TaskType:
     """任务类型（Task Type）。"""
+
     BINARY = "binary"
     MULTICLASS = "multiclass"
     MULTILABEL = "multilabel"
@@ -69,7 +84,7 @@ class TaskType:
 def _to_numpy(x: ArrayLike | None) -> Optional[np.ndarray]:
     if x is None:
         return None
-    if _TORCH_AVAILABLE and isinstance(x, getattr(__import__('torch'), 'Tensor')):  # type: ignore
+    if _TORCH_AVAILABLE and isinstance(x, getattr(__import__("torch"), "Tensor")):  # type: ignore
         x = x.detach().cpu().numpy()
     else:
         x = np.asarray(x)
@@ -109,6 +124,7 @@ def infer_task_type(y_true: ArrayLike) -> str:
 # Core metrics computation
 # -----------------------------------------------------------------------------
 
+
 @dataclass
 class ClassificationMetrics:
     """单次评估的指标（per-run metrics）。
@@ -132,7 +148,9 @@ class ClassificationMetrics:
     pr_auc_macro: float
 
     def to_dict(self) -> Dict[str, float]:
-        return {k: float(v) if v == v else float("nan") for k, v in asdict(self).items()}  # NaN-safe
+        return {
+            k: float(v) if v == v else float("nan") for k, v in asdict(self).items()
+        }  # NaN-safe
 
 
 def _safe_roc_auc(
@@ -150,7 +168,9 @@ def _safe_roc_auc(
         return float("nan")
     y_true = np.asarray(y_true)
     try:
-        return float(roc_auc_score(y_true, y_score, multi_class=multi_class, average=average))
+        return float(
+            roc_auc_score(y_true, y_score, multi_class=multi_class, average=average)
+        )
     except Exception as e:  # pragma: no cover
         LOGGER.warning("roc_auc_score failed: %s", e)
         return float("nan")
@@ -172,7 +192,9 @@ def _safe_pr_auc(
         return float("nan")
 
 
-def _ensure_probabilities(task: str, y_pred: Optional[np.ndarray], y_score: Optional[np.ndarray]) -> Optional[np.ndarray]:
+def _ensure_probabilities(
+    task: str, y_pred: Optional[np.ndarray], y_score: Optional[np.ndarray]
+) -> Optional[np.ndarray]:
     """Normalize scores to probabilities when possible.
 
     - binary: allow shape (N,) or (N,2) or (N,1) → convert to (N,) positive-class probs
@@ -194,7 +216,13 @@ def _ensure_probabilities(task: str, y_pred: Optional[np.ndarray], y_score: Opti
     return y_score
 
 
-def safe_confusion_matrix(y_true: ArrayLike, y_pred: ArrayLike, *, labels: Optional[Sequence[int]] = None, normalize: Optional[str] = None) -> np.ndarray:
+def safe_confusion_matrix(
+    y_true: ArrayLike,
+    y_pred: ArrayLike,
+    *,
+    labels: Optional[Sequence[int]] = None,
+    normalize: Optional[str] = None,
+) -> np.ndarray:
     """Confusion matrix with safe fallback when classes missing in a fold.
 
     @param normalize: {None, 'true', 'pred', 'all'}
@@ -208,7 +236,12 @@ def safe_confusion_matrix(y_true: ArrayLike, y_pred: ArrayLike, *, labels: Optio
     except Exception as e:  # pragma: no cover
         LOGGER.warning("confusion_matrix failed: %s", e)
         # Fallback: compute on the union of observed labels
-        return confusion_matrix(y_t, y_p, labels=np.unique(np.concatenate([np.unique(y_t), np.unique(y_p)])), normalize=normalize)
+        return confusion_matrix(
+            y_t,
+            y_p,
+            labels=np.unique(np.concatenate([np.unique(y_t), np.unique(y_p)])),
+            normalize=normalize,
+        )
 
 
 def compute_classification_metrics(
@@ -261,7 +294,9 @@ def compute_classification_metrics(
 
     # Precision/Recall/F1
     def _prf(avg: str) -> Tuple[float, float, float]:
-        p, r, f1, _ = precision_recall_fscore_support(y_t, y_p, average=avg, zero_division=zero_division)
+        p, r, f1, _ = precision_recall_fscore_support(
+            y_t, y_p, average=avg, zero_division=zero_division
+        )
         return float(p), float(r), float(f1)
 
     p_macro, r_macro, f1_macro = _prf("macro")
@@ -269,8 +304,18 @@ def compute_classification_metrics(
     p_weighted, r_weighted, f1_weighted = _prf("weighted")
 
     # AUCs
-    roc_auc_ovr = _safe_roc_auc(y_t, y_s, multi_class=average_for_roc[0], average=None if task != TaskType.MULTILABEL else "micro")
-    roc_auc_ovo = _safe_roc_auc(y_t, y_s, multi_class=average_for_roc[1], average=None if task != TaskType.MULTILABEL else "micro")
+    roc_auc_ovr = _safe_roc_auc(
+        y_t,
+        y_s,
+        multi_class=average_for_roc[0],
+        average=None if task != TaskType.MULTILABEL else "micro",
+    )
+    roc_auc_ovo = _safe_roc_auc(
+        y_t,
+        y_s,
+        multi_class=average_for_roc[1],
+        average=None if task != TaskType.MULTILABEL else "micro",
+    )
 
     # PR-AUC
     pr_auc_micro = _safe_pr_auc(y_t, y_s, average=average_for_pr[0])
@@ -281,7 +326,9 @@ def compute_classification_metrics(
     if y_s is not None and task == TaskType.MULTICLASS and y_s.ndim == 2:
         for k in topk:
             try:
-                out[f"top{k}_accuracy"] = float(top_k_accuracy_score(y_t, y_s, k=k, labels=labels))
+                out[f"top{k}_accuracy"] = float(
+                    top_k_accuracy_score(y_t, y_s, k=k, labels=labels)
+                )
             except Exception as e:  # pragma: no cover
                 LOGGER.debug("top-%d accuracy failed: %s", k, e)
                 out[f"top{k}_accuracy"] = float("nan")
@@ -310,6 +357,7 @@ def compute_classification_metrics(
 # -----------------------------------------------------------------------------
 # Fold-wise accumulator
 # -----------------------------------------------------------------------------
+
 
 class FoldAccumulator:
     """@zh 折次（fold）指标累加与统计；@en Fold-wise metrics aggregator.
@@ -341,7 +389,9 @@ class FoldAccumulator:
                 table[k].append(v)
         return table
 
-    def summary(self, *, prefix_mean: str = "mean_", prefix_std: str = "std_") -> Dict[str, float]:
+    def summary(
+        self, *, prefix_mean: str = "mean_", prefix_std: str = "std_"
+    ) -> Dict[str, float]:
         table = self.as_table()
         out: Dict[str, float] = {}
         for k, col in table.items():
@@ -358,7 +408,9 @@ class FoldAccumulator:
 if __name__ == "__main__":  # pragma: no cover
     import argparse
 
-    parser = argparse.ArgumentParser(description="Compute classification metrics from CSV files or arrays.")
+    parser = argparse.ArgumentParser(
+        description="Compute classification metrics from CSV files or arrays."
+    )
     parser.add_argument("--demo", action="store_true", help="Run a tiny demo.")
     args = parser.parse_args()
 

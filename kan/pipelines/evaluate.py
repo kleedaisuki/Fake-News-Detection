@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
 """
 @file   kan/pipelines/evaluate.py
 @brief  Pipeline: 聚合/评估已训练 run 的预测，生成指标、混淆矩阵与曲线数据；支持 k-fold 汇总。
@@ -40,7 +41,17 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 import numpy as np
 
@@ -50,17 +61,25 @@ import numpy as np
 try:
     from kan.utils.logging import configure_logging, log_context
     import logging
+
     LOGGER = logging.getLogger("kan.pipelines.evaluate")
 except Exception:
     import logging
-    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(name)s | %(message)s")
+
+    logging.basicConfig(
+        level=logging.INFO, format="[%(asctime)s] %(levelname)s %(name)s | %(message)s"
+    )
     LOGGER = logging.getLogger("kan.pipelines.evaluate")
+
     def configure_logging(*args, **kwargs):  # type: ignore
         pass
+
     from contextlib import contextmanager
+
     @contextmanager
     def log_context(**kwargs):  # type: ignore
         yield
+
 
 # ------------------------------
 # YAML 合并与覆盖
@@ -71,7 +90,9 @@ except Exception as e:  # pragma: no cover
     raise RuntimeError("缺少 PyYAML，请 `pip install pyyaml`。") from e
 
 
-def _deep_update(base: MutableMapping[str, Any], other: Mapping[str, Any]) -> MutableMapping[str, Any]:
+def _deep_update(
+    base: MutableMapping[str, Any], other: Mapping[str, Any]
+) -> MutableMapping[str, Any]:
     for k, v in other.items():
         if isinstance(v, Mapping) and isinstance(base.get(k), Mapping):
             _deep_update(base[k], v)  # type: ignore
@@ -107,6 +128,7 @@ def _apply_overrides(cfg: MutableMapping[str, Any], overrides: Sequence[str]) ->
 # 工具函数
 # ------------------------------
 
+
 def _ensure_dir(p: Path) -> Path:
     p.mkdir(parents=True, exist_ok=True)
     return p
@@ -137,7 +159,9 @@ def _discover_pred(run_dir: Path, split: str) -> Optional[Path]:
     if p.exists():
         return p
     # 回落：扫描 step/epoch 标注文件，取最近修改
-    cands = list(run_dir.glob(f"pred_{split}@*.json")) + list(run_dir.glob(f"pred_{split}@*.jsonl"))
+    cands = list(run_dir.glob(f"pred_{split}@*.json")) + list(
+        run_dir.glob(f"pred_{split}@*.jsonl")
+    )
     if cands:
         return sorted(cands, key=lambda x: x.stat().st_mtime, reverse=True)[0]
     return None
@@ -171,30 +195,56 @@ def _to_2d_scores(y_score: Any, num_labels: Optional[int]) -> np.ndarray:
 # 指标计算（桥接 kan.utils.metrics，必要时回退 sklearn）
 # ------------------------------
 
-def _compute_metrics_bridge(problem_type: str, y_true: np.ndarray, y_pred: Optional[np.ndarray], y_score: Optional[np.ndarray]) -> Dict[str, float]:
+
+def _compute_metrics_bridge(
+    problem_type: str,
+    y_true: np.ndarray,
+    y_pred: Optional[np.ndarray],
+    y_score: Optional[np.ndarray],
+) -> Dict[str, float]:
     # 首选仓库自带的 metrics
     try:
         from kan.utils.metrics import compute_classification_metrics
+
         if problem_type == "single_label_classification":
             assert y_score is not None and y_score.ndim == 2
-            return compute_classification_metrics(y_true, y_pred=y_score.argmax(axis=1), y_score=y_score)
+            return compute_classification_metrics(
+                y_true, y_pred=y_score.argmax(axis=1), y_score=y_score
+            )
         elif problem_type == "multilabel_classification":
             assert y_score is not None and y_score.ndim == 2
-            return compute_classification_metrics(y_true, y_pred=(y_score >= 0.5).astype("i4"), y_score=y_score)
+            return compute_classification_metrics(
+                y_true, y_pred=(y_score >= 0.5).astype("i4"), y_score=y_score
+            )
         else:
             from sklearn.metrics import mean_squared_error
+
             assert y_score is not None and y_score.ndim >= 1
-            return {"mse": float(mean_squared_error(y_true.astype(float), y_score.squeeze(-1).astype(float)))}
+            return {
+                "mse": float(
+                    mean_squared_error(
+                        y_true.astype(float), y_score.squeeze(-1).astype(float)
+                    )
+                )
+            }
     except Exception:
         # 轻量回退
         try:
-            from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+            from sklearn.metrics import (
+                accuracy_score,
+                f1_score,
+                precision_score,
+                recall_score,
+            )
+
             if problem_type == "single_label_classification":
                 yp = y_pred if y_pred is not None else y_score.argmax(axis=1)
                 return {
                     "acc": float(accuracy_score(y_true, yp)),
                     "f1_macro": float(f1_score(y_true, yp, average="macro")),
-                    "precision_macro": float(precision_score(y_true, yp, average="macro")),
+                    "precision_macro": float(
+                        precision_score(y_true, yp, average="macro")
+                    ),
                     "recall_macro": float(recall_score(y_true, yp, average="macro")),
                 }
             elif problem_type == "multilabel_classification":
@@ -205,7 +255,14 @@ def _compute_metrics_bridge(problem_type: str, y_true: np.ndarray, y_pred: Optio
                 }
             else:
                 from sklearn.metrics import mean_squared_error
-                return {"mse": float(mean_squared_error(y_true.astype(float), y_score.squeeze(-1).astype(float)))}
+
+                return {
+                    "mse": float(
+                        mean_squared_error(
+                            y_true.astype(float), y_score.squeeze(-1).astype(float)
+                        )
+                    )
+                }
         except Exception:
             return {}
 
@@ -214,7 +271,10 @@ def _compute_metrics_bridge(problem_type: str, y_true: np.ndarray, y_pred: Optio
 # 聚合评估
 # ------------------------------
 
-def _load_split_from_run(run_dir: Path, split: str, problem_type: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+
+def _load_split_from_run(
+    run_dir: Path, split: str, problem_type: str
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     pred_path = _discover_pred(run_dir, split)
     if pred_path is None:
         raise FileNotFoundError(f"{run_dir} 缺少 {split} 预测文件。")
@@ -235,22 +295,39 @@ def _load_split_from_run(run_dir: Path, split: str, problem_type: str) -> Tuple[
             y_trues[-1] = yt  # 覆盖为 1xL
             y_scores.append(_to_2d_scores(r.get("y_score"), None))
             if r.get("y_pred") is not None:
-                y_preds.append(np.asarray(r.get("y_pred"), dtype=np.int64).reshape(1, -1))
+                y_preds.append(
+                    np.asarray(r.get("y_pred"), dtype=np.int64).reshape(1, -1)
+                )
         else:  # regression
-            ys = np.asarray([r.get("y_score") if r.get("y_score") is not None else r.get("y_pred")], dtype=float).reshape(1, 1)
+            ys = np.asarray(
+                [r.get("y_score") if r.get("y_score") is not None else r.get("y_pred")],
+                dtype=float,
+            ).reshape(1, 1)
             y_scores.append(ys)
             # y_pred 对回归没必要强求
-    y_true = np.concatenate(y_trues, axis=0) if y_trues else np.empty((0,), dtype=np.int64)
+    y_true = (
+        np.concatenate(y_trues, axis=0) if y_trues else np.empty((0,), dtype=np.int64)
+    )
     y_pred = np.concatenate(y_preds, axis=0) if y_preds else None
     y_score = np.concatenate(y_scores, axis=0) if y_scores else None
-    return y_true, (y_pred if y_pred is not None else np.empty((0,), dtype=np.int64)), y_score
+    return (
+        y_true,
+        (y_pred if y_pred is not None else np.empty((0,), dtype=np.int64)),
+        y_score,
+    )
 
 
-def _confusion_matrix(y_true: np.ndarray, y_pred: np.ndarray, num_labels: Optional[int] = None) -> np.ndarray:
+def _confusion_matrix(
+    y_true: np.ndarray, y_pred: np.ndarray, num_labels: Optional[int] = None
+) -> np.ndarray:
     if y_true.ndim != 1:
         return np.zeros((0, 0), dtype=np.int64)
     if num_labels is None:
-        K = int(max(y_true.max(initial=0), y_pred.max(initial=0)) + 1) if y_true.size and y_pred.size else 0
+        K = (
+            int(max(y_true.max(initial=0), y_pred.max(initial=0)) + 1)
+            if y_true.size and y_pred.size
+            else 0
+        )
     else:
         K = int(num_labels)
     cm = np.zeros((K, K), dtype=np.int64)
@@ -271,7 +348,10 @@ def _write_csv(path: Path, rows: Iterable[Iterable[Any]]):
 # 主流程：run_from_configs
 # ------------------------------
 
-def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ()) -> Path:
+
+def run_from_configs(
+    config_paths: Sequence[str], overrides: Sequence[str] = ()
+) -> Path:
     # 1) 合并配置
     cfg: MutableMapping[str, Any] = {}
     for p in config_paths:
@@ -283,12 +363,24 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
     eval_cfg = cfg.get("eval") or cfg
     inputs: List[str] = list(eval_cfg.get("inputs", []))
     if not inputs and eval_cfg.get("inputs_glob"):
-        inputs = [str(p) for p in Path(eval_cfg.get("inputs_glob")).parent.glob(Path(eval_cfg.get("inputs_glob")).name)]
+        inputs = [
+            str(p)
+            for p in Path(eval_cfg.get("inputs_glob")).parent.glob(
+                Path(eval_cfg.get("inputs_glob")).name
+            )
+        ]
     assert inputs, "请在 eval.inputs 或 eval.inputs_glob 指定需要评估的 run 目录。"
 
     splits: List[str] = list(eval_cfg.get("splits", ["validation", "test"]))
-    problem_type = eval_cfg.get("problem_type", cfg.get("head", {}).get("problem_type", "single_label_classification"))
-    num_labels = int(eval_cfg.get("num_labels", cfg.get("head", {}).get("num_labels", 2))) if problem_type != "regression" else 1
+    problem_type = eval_cfg.get(
+        "problem_type",
+        cfg.get("head", {}).get("problem_type", "single_label_classification"),
+    )
+    num_labels = (
+        int(eval_cfg.get("num_labels", cfg.get("head", {}).get("num_labels", 2)))
+        if problem_type != "regression"
+        else 1
+    )
 
     now = time.strftime("%Y%m%d-%H%M%S")
     run_id = cfg.get("run_id") or f"eval-{now}"
@@ -301,7 +393,9 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
         pass
 
     with log_context(run_id=str(run_id), stage="evaluate", step=0):
-        (out_dir / "configs_merged.yaml").write_text(yaml.safe_dump(dict(cfg), allow_unicode=True), encoding="utf-8")
+        (out_dir / "configs_merged.yaml").write_text(
+            yaml.safe_dump(dict(cfg), allow_unicode=True), encoding="utf-8"
+        )
         LOGGER.info("评估 runs：%s", inputs)
 
         for split in splits:
@@ -313,12 +407,16 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
             for run_path in inputs:
                 rd = Path(run_path)
                 try:
-                    y_true, y_pred, y_score = _load_split_from_run(rd, split, problem_type)
+                    y_true, y_pred, y_score = _load_split_from_run(
+                        rd, split, problem_type
+                    )
                 except FileNotFoundError:
                     LOGGER.warning("%s 缺少 %s 预测文件，跳过。", rd, split)
                     continue
                 # 单 run 指标
-                m = _compute_metrics_bridge(problem_type, y_true, (y_pred if y_pred.size else None), y_score)
+                m = _compute_metrics_bridge(
+                    problem_type, y_true, (y_pred if y_pred.size else None), y_score
+                )
                 run_metrics[rd.name] = m
                 # 收集用于 micro
                 if y_true.size:
@@ -331,8 +429,22 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
             # macro 均值/标准差
             if run_metrics:
                 keys = sorted({k for m in run_metrics.values() for k in m.keys()})
-                means = {k: float(np.mean([m.get(k, np.nan) for m in run_metrics.values() if k in m])) for k in keys}
-                stds  = {k: float(np.std([m.get(k, np.nan) for m in run_metrics.values() if k in m]))  for k in keys}
+                means = {
+                    k: float(
+                        np.mean(
+                            [m.get(k, np.nan) for m in run_metrics.values() if k in m]
+                        )
+                    )
+                    for k in keys
+                }
+                stds = {
+                    k: float(
+                        np.std(
+                            [m.get(k, np.nan) for m in run_metrics.values() if k in m]
+                        )
+                    )
+                    for k in keys
+                }
             else:
                 means, stds = {}, {}
 
@@ -342,7 +454,9 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
                 y_true_all = np.concatenate(ys_true, axis=0)
                 y_pred_all = np.concatenate(ys_pred, axis=0) if ys_pred else None
                 y_score_all = np.concatenate(ys_score, axis=0) if ys_score else None
-                micro = _compute_metrics_bridge(problem_type, y_true_all, y_pred_all, y_score_all)
+                micro = _compute_metrics_bridge(
+                    problem_type, y_true_all, y_pred_all, y_score_all
+                )
             # 写 metrics
             metrics_out = {
                 "split": split,
@@ -353,10 +467,16 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
                 "macro_std": stds,
                 "runs": run_metrics,
             }
-            (reports_dir / f"metrics_{split}.json").write_text(json.dumps(metrics_out, indent=2, ensure_ascii=False), encoding="utf-8")
+            (reports_dir / f"metrics_{split}.json").write_text(
+                json.dumps(metrics_out, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
 
             # 混淆矩阵（仅适用于单标签分类）
-            if problem_type == "single_label_classification" and ys_true and (ys_pred or ys_score):
+            if (
+                problem_type == "single_label_classification"
+                and ys_true
+                and (ys_pred or ys_score)
+            ):
                 y_true_all = np.concatenate(ys_true, axis=0).reshape(-1)
                 if ys_pred:
                     y_pred_all = np.concatenate(ys_pred, axis=0).reshape(-1)
@@ -364,11 +484,16 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
                     y_score_all = np.concatenate(ys_score, axis=0)
                     y_pred_all = y_score_all.argmax(axis=1)
                 cm = _confusion_matrix(y_true_all, y_pred_all, num_labels=num_labels)
-                _write_csv(reports_dir / f"confusion_matrix_{split}.csv", [["true\\pred"] + list(range(num_labels))] + [[i] + list(map(int, row)) for i, row in enumerate(cm)])
+                _write_csv(
+                    reports_dir / f"confusion_matrix_{split}.csv",
+                    [["true\\pred"] + list(range(num_labels))]
+                    + [[i] + list(map(int, row)) for i, row in enumerate(cm)],
+                )
 
                 # 试图输出 per-class ROC/PR 曲线
                 try:
                     from sklearn.metrics import roc_curve, precision_recall_curve
+
                     curves_dir = _ensure_dir(reports_dir / "curves" / split)
                     # 拿到全量概率
                     if ys_score:
@@ -395,10 +520,23 @@ def run_from_configs(config_paths: Sequence[str], overrides: Sequence[str] = ())
 # CLI 入口
 # ------------------------------
 
+
 def build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Evaluate and aggregate KAN runs")
-    p.add_argument("-c", "--config", nargs="+", required=True, help="YAML 配置文件列表，后者覆盖前者")
-    p.add_argument("-o", "--override", nargs="*", default=[], help="点号覆盖，如 eval.inputs_glob='runs/kan-*/' eval.splits='[\"validation\",\"test\"]'")
+    p.add_argument(
+        "-c",
+        "--config",
+        nargs="+",
+        required=True,
+        help="YAML 配置文件列表，后者覆盖前者",
+    )
+    p.add_argument(
+        "-o",
+        "--override",
+        nargs="*",
+        default=[],
+        help="点号覆盖，如 eval.inputs_glob='runs/kan-*/' eval.splits='[\"validation\",\"test\"]'",
+    )
     return p
 
 

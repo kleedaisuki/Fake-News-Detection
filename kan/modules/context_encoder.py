@@ -51,7 +51,12 @@ import torch
 from torch import nn, Tensor
 
 try:  # 本地相对导入（保持解耦）
-    from kan.modules.text_encoder import BaseTextEncoder, HFTextEncoder, TextEncoderConfig, build_text_encoder
+    from kan.modules.text_encoder import (
+        BaseTextEncoder,
+        HFTextEncoder,
+        TextEncoderConfig,
+        build_text_encoder,
+    )
 except Exception:  # pragma: no cover
     # 允许相对导入失败时再尝试绝对路径（取决于包布局）
     from .text_encoder import BaseTextEncoder, HFTextEncoder, TextEncoderConfig, build_text_encoder  # type: ignore
@@ -100,7 +105,12 @@ class ContextEncoder(nn.Module):
     - 将四维张量 `[B,E,Lc,Lt]` 通过展平为 `[B*E*Lc, Lt]` 输入文本编码器，再聚合回 `[B,E,D]`。
     """
 
-    def __init__(self, cfg: ContextEncoderConfig, *, text_encoder_module: Optional[BaseTextEncoder] = None):
+    def __init__(
+        self,
+        cfg: ContextEncoderConfig,
+        *,
+        text_encoder_module: Optional[BaseTextEncoder] = None,
+    ):
         super().__init__()
         self.cfg = cfg
 
@@ -109,7 +119,9 @@ class ContextEncoder(nn.Module):
         elif cfg.text_encoder is not None:
             self.text_encoder = build_text_encoder(cfg.text_encoder)
         else:
-            raise ValueError("必须提供 TextEncoderConfig 或已构建的 text_encoder_module / Need a text encoder")
+            raise ValueError(
+                "必须提供 TextEncoderConfig 或已构建的 text_encoder_module / Need a text encoder"
+            )
 
         # 冻结策略
         if cfg.freeze_text_encoder:
@@ -127,17 +139,19 @@ class ContextEncoder(nn.Module):
 
         logger.info(
             "ContextEncoder init: D=%s, freeze_text_encoder=%s, inner_pooling=%s",
-            self.hidden_size, cfg.freeze_text_encoder, cfg.inner_pooling,
+            self.hidden_size,
+            cfg.freeze_text_encoder,
+            cfg.inner_pooling,
         )
 
     # ----------------------------- Forward -----------------------------
     def forward(
         self,
         *,
-        context_input_ids: Tensor,          # [B,E,Lc,Lt]
-        context_attention_mask: Tensor,     # [B,E,Lc,Lt]
+        context_input_ids: Tensor,  # [B,E,Lc,Lt]
+        context_attention_mask: Tensor,  # [B,E,Lc,Lt]
         context_token_type_ids: Optional[Tensor] = None,  # [B,E,Lc,Lt]
-        contexts_mask: Optional[Tensor] = None,           # [B,E,Lc]
+        contexts_mask: Optional[Tensor] = None,  # [B,E,Lc]
     ) -> Dict[str, Tensor]:
         cfg = self.cfg
         device = context_input_ids.device
@@ -151,22 +165,37 @@ class ContextEncoder(nn.Module):
         N = B * E * Lc
         ids_flat = context_input_ids.view(N, Lt)
         attn_flat = context_attention_mask.view(N, Lt)
-        tok_flat = context_token_type_ids.view(N, Lt) if context_token_type_ids is not None else None
+        tok_flat = (
+            context_token_type_ids.view(N, Lt)
+            if context_token_type_ids is not None
+            else None
+        )
         mask_flat = contexts_mask.view(N)
 
         # 仅对有效条目编码（减少无用计算）
-        valid_idx = torch.nonzero(mask_flat > 0, as_tuple=False).squeeze(-1)  # [N_valid]
+        valid_idx = torch.nonzero(mask_flat > 0, as_tuple=False).squeeze(
+            -1
+        )  # [N_valid]
         num_valid = int(valid_idx.numel())
         if num_valid == 0:
             # 没有任何有效上下文 -> 返回零张量
-            zeros_be = context_input_ids.new_zeros((B, E, self.hidden_size), dtype=torch.float32)
-            zeros_b = context_input_ids.new_zeros((B, self.hidden_size), dtype=torch.float32)
+            zeros_be = context_input_ids.new_zeros(
+                (B, E, self.hidden_size), dtype=torch.float32
+            )
+            zeros_b = context_input_ids.new_zeros(
+                (B, self.hidden_size), dtype=torch.float32
+            )
             return {
                 "contexts_last_hidden": zeros_be,
                 "contexts_pooled": zeros_b,
                 "contexts_mask": context_input_ids.new_zeros((B, E), dtype=torch.long),
-                "raw_contexts_last_hidden": context_input_ids.new_zeros((B, E, Lc, self.hidden_size), dtype=torch.float32)
-                if cfg.return_raw_contexts else None,
+                "raw_contexts_last_hidden": (
+                    context_input_ids.new_zeros(
+                        (B, E, Lc, self.hidden_size), dtype=torch.float32
+                    )
+                    if cfg.return_raw_contexts
+                    else None
+                ),
             }
 
         # 构造子批，仅编码有效上下文
@@ -197,7 +226,9 @@ class ContextEncoder(nn.Module):
         contexts_mask_f = contexts_mask.to(dtype=ctx_vec.dtype)  # [B,E,Lc]
         if cfg.inner_pooling == "mean":
             denom = contexts_mask_f.sum(dim=-1, keepdim=True).clamp(min=1e-6)  # [B,E,1]
-            ctx_be = (ctx_vec * contexts_mask_f.unsqueeze(-1)).sum(dim=2) / denom  # [B,E,D]
+            ctx_be = (ctx_vec * contexts_mask_f.unsqueeze(-1)).sum(
+                dim=2
+            ) / denom  # [B,E,D]
         elif cfg.inner_pooling == "max":
             very_small = torch.finfo(ctx_vec.dtype).min
             masked = ctx_vec.masked_fill(contexts_mask_f.unsqueeze(-1) == 0, very_small)
@@ -209,12 +240,14 @@ class ContextEncoder(nn.Module):
 
         # E 聚合 -> [B,D]
         has_ctx = (contexts_mask.long().sum(dim=-1) > 0).long()  # [B,E]
-        contexts_pooled = self._pool_over_entities(ctx_be, has_ctx, mode=cfg.entity_pooling)
+        contexts_pooled = self._pool_over_entities(
+            ctx_be, has_ctx, mode=cfg.entity_pooling
+        )
 
         out = {
-            "contexts_last_hidden": ctx_be,           # [B,E,D]
-            "contexts_pooled": contexts_pooled,       # [B,D]
-            "contexts_mask": has_ctx,                 # [B,E]
+            "contexts_last_hidden": ctx_be,  # [B,E,D]
+            "contexts_pooled": contexts_pooled,  # [B,D]
+            "contexts_mask": has_ctx,  # [B,E]
         }
         if raw_ctx is not None:
             out["raw_contexts_last_hidden"] = raw_ctx  # [B,E,Lc,D]
@@ -222,12 +255,16 @@ class ContextEncoder(nn.Module):
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "shapes: ctx_be=%s, pooled=%s, has_ctx=%s",
-                tuple(ctx_be.shape), tuple(contexts_pooled.shape), tuple(has_ctx.shape)
+                tuple(ctx_be.shape),
+                tuple(contexts_pooled.shape),
+                tuple(has_ctx.shape),
             )
         return out
 
     # --------------------------- Helpers ---------------------------
-    def _pool_over_entities(self, x: Tensor, mask: Tensor, *, mode: Literal["mean", "max"]) -> Tensor:
+    def _pool_over_entities(
+        self, x: Tensor, mask: Tensor, *, mode: Literal["mean", "max"]
+    ) -> Tensor:
         """跨实体维 E 聚合到样本向量。
         x: [B,E,D], mask: [B,E] -> [B,D]
         """
@@ -259,7 +296,9 @@ class ContextEncoder(nn.Module):
         B = len(contexts)
         E_max = max((len(es) for es in contexts), default=1)
         Lc_max = max((len(c) for es in contexts for c in es), default=1)
-        device = device or (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
+        device = device or (
+            torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        )
 
         # 展平为一维列表做分词
         texts: List[str] = []
@@ -272,11 +311,23 @@ class ContextEncoder(nn.Module):
                     coords.append((b, e, j))
         if len(texts) == 0:
             # 返回空 batch（占位）
-            shape_ids = (B, E_max, Lc_max, max_length or getattr(self.text_encoder, "cfg", TextEncoderConfig()).max_length)
+            shape_ids = (
+                B,
+                E_max,
+                Lc_max,
+                max_length
+                or getattr(self.text_encoder, "cfg", TextEncoderConfig()).max_length,
+            )
             return {
-                "context_input_ids": torch.zeros(shape_ids, dtype=torch.long, device=device),
-                "context_attention_mask": torch.zeros(shape_ids, dtype=torch.long, device=device),
-                "contexts_mask": torch.zeros((B, E_max, Lc_max), dtype=torch.long, device=device),
+                "context_input_ids": torch.zeros(
+                    shape_ids, dtype=torch.long, device=device
+                ),
+                "context_attention_mask": torch.zeros(
+                    shape_ids, dtype=torch.long, device=device
+                ),
+                "contexts_mask": torch.zeros(
+                    (B, E_max, Lc_max), dtype=torch.long, device=device
+                ),
             }
 
         # 使用内部 tokenizer
@@ -287,7 +338,8 @@ class ContextEncoder(nn.Module):
                 texts,
                 padding=pad,
                 truncation=True,
-                max_length=max_length or getattr(self.text_encoder, "cfg", TextEncoderConfig()).max_length,
+                max_length=max_length
+                or getattr(self.text_encoder, "cfg", TextEncoderConfig()).max_length,
                 add_special_tokens=True,
                 return_tensors="pt",
             )
@@ -322,7 +374,10 @@ class ContextEncoder(nn.Module):
 # Factory
 # -----------------------------------------------------------------------------
 
-def build_context_encoder(cfg: ContextEncoderConfig, *, text_encoder_module: Optional[BaseTextEncoder] = None) -> ContextEncoder:
+
+def build_context_encoder(
+    cfg: ContextEncoderConfig, *, text_encoder_module: Optional[BaseTextEncoder] = None
+) -> ContextEncoder:
     enc = ContextEncoder(cfg, text_encoder_module=text_encoder_module)
     if cfg.device:
         enc = enc.to(torch.device(cfg.device))
@@ -338,13 +393,22 @@ def build_context_encoder(cfg: ContextEncoderConfig, *, text_encoder_module: Opt
 if __name__ == "__main__":  # pragma: no cover
     logging.basicConfig(level=logging.INFO)
     # 使用一个极小的 BERT 以便快速自测
-    te_cfg = TextEncoderConfig(model_name_or_path="prajjwal1/bert-tiny", max_length=24, pooling="mean")
-    ctx_cfg = ContextEncoderConfig(text_encoder=te_cfg, inner_pooling="mean", entity_pooling="mean")
+    te_cfg = TextEncoderConfig(
+        model_name_or_path="prajjwal1/bert-tiny", max_length=24, pooling="mean"
+    )
+    ctx_cfg = ContextEncoderConfig(
+        text_encoder=te_cfg, inner_pooling="mean", entity_pooling="mean"
+    )
     enc = build_context_encoder(ctx_cfg)
 
     contexts = [
-        [["Barack Obama was the 44th President of the United States.", "Born in Hawaii."],
-         ["White House is the official residence."]],
+        [
+            [
+                "Barack Obama was the 44th President of the United States.",
+                "Born in Hawaii.",
+            ],
+            ["White House is the official residence."],
+        ],
         [["OpenAI created ChatGPT."], []],
     ]
     batch = enc.batch_encode_contexts(contexts, pad_to_max_length=True)
