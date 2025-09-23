@@ -30,7 +30,6 @@
 * [日志与可观测性](#日志与可观测性)
 * [版本与依赖](#版本与依赖)
 * [常见问题（FAQ）](#常见问题faq)
-* [变更记录](#变更记录)
 
 ---
 
@@ -231,9 +230,3 @@ A3：将组件注册到对应命名空间（如 `HUB.get('head').register('my_he
 
 **Q4：如何保证论文复现实验完全可复现？**
 A4：入口第一行 `set_seed(...)`，训练时冻结注册表 `Registry.freeze()`，使用 `FoldAccumulator` 做统计，记录系统环境（CUDA/Driver/cuDNN）与 `deterministic` 标志。
-
----
-
-## 变更记录
-
-* **v0.1 (2025‑09‑16)**：初版发布，提供 `metrics/registry/seed` 三大模块，统一日志与契约；预置 `HUB` 命名空间。

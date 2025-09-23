@@ -33,7 +33,7 @@ from __future__ import annotations
   - This module focuses on IO normalization and light validation only.
 """
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, field
 from enum import Enum
 from hashlib import blake2b
 import json
@@ -41,16 +41,11 @@ import logging
 from pathlib import Path
 from typing import (
     Any,
-    Callable,
     Dict,
-    Iterable,
-    Iterator,
     List,
     Mapping,
-    MutableMapping,
     Optional,
     Sequence,
-    Tuple,
     Union,
 )
 
@@ -144,7 +139,7 @@ class DatasetConfig:
     encoding: str = "utf-8"
     lines: bool = True  # for json
     # Field mapping & transforms
-    fields: FieldMap = FieldMap()
+    fields: FieldMap = field(default_factory=FieldMap)
     label_map: Optional[Mapping[Any, int]] = None  # map raw label -> {0,1,...}
     # Misc
     id_prefix: Optional[str] = None
@@ -282,6 +277,10 @@ class BaseLoader:
         text = _normalize_text(
             str(raw_text), lower=self.cfg.lowercase_text, strip=self.cfg.strip_text
         )
+        
+        # 归一化后仍为空（或纯空白）→ 丢弃该行
+        if text.strip() == "":
+            return None
 
         # id
         raw_id = row.get(f.id or "id")

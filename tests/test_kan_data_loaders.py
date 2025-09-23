@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 import json
 from pathlib import Path
-import pandas as pd
 import pytest
 
 from kan.data.loaders import (
@@ -11,13 +10,11 @@ from kan.data.loaders import (
     JSONLinesLoader,
     loader_from_config,
     Dataset,
-    build_loader,
-    CSVLoader,
 )
 
 # ========= 配置区：按你的真实路径/文件名修改 ==============
-# 假设四个 JSONL 放在同一目录，比如 /datasets/politifact/processed/
-DATA_DIR = Path("/datasets/politifact/processed")  # ← 若路径不同，这里改掉
+# 假设四个 JSONL 放在同一目录，比如 D:\Code\Fake-News-Detection\datasets\politifact\processed
+DATA_DIR = Path("D:\\Code\\Fake-News-Detection\\datasets\\politifact\\processed")  # ← 若路径不同，这里改掉
 SPLITS = {
     "train": "HF.jsonl",
     "validation": "HR.jsonl",
