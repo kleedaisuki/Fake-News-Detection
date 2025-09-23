@@ -352,8 +352,9 @@ def _parse_neighbor(item: Any) -> Tuple[Optional[str], Optional[str]]:
         p, q = s.split("=", 1)
         p = p.strip()
         q = q.strip()
-        if q.startswith("Q"):
-            return q, (p if p.startswith("P") else None)
+        # 严格模式：只有 "Pxxxx=Qyyyy" 才算合规；否则整体视为无效
+        if p.startswith("P") and q.startswith("Q"):
+            return q, p
         return None, None
     else:
         return (s if s.startswith("Q") else None), None
