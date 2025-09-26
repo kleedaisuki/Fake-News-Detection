@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 """
-@file   kan/pipelines/entity_linking.py
+@file   kan/data/entity_linking.py
 @brief  Pluggable entity linking pipeline stage for KAN (knowledge-aware attention).
 @date   2025-09-16
 
@@ -28,7 +28,7 @@ from __future__ import annotations
 @notes
   - Knowledge graph neighbor fetching (context expansion) 不在本模块，交由 `kan/pipelines/kg_context.py`。
   - 远端服务（如 TagMe）默认关闭；DummyLinker 提供零依赖可运行路径，便于本地/CI。
-  - 统一日志命名空间：`kan.pipelines.entity_linking`。
+  - 统一日志命名空间：`kan.data.loaders.entity_linking`。
 """
 
 from dataclasses import dataclass, asdict, field
@@ -63,7 +63,7 @@ except Exception:  # pragma: no cover - registry may be unavailable at import ti
 
     _EL_REG = _DummyReg()  # type: ignore
 
-LOGGER = logging.getLogger("kan.pipelines.entity_linking")
+LOGGER = logging.getLogger("kan.data.loaders.entity_linking")
 
 # -----------------------------------------------------------------------------
 # Data structures
@@ -418,7 +418,7 @@ __doc_examples__ = r"""
  * @zh 用法（最小可运行 Dummy 后端）：
  * ```python
  * from kan.data.loaders import NewsRecord
- * from kan.pipelines.entity_linking import ELConfig, link_records
+ * from kan.data.loaders.entity_linking import ELConfig, link_records
  * records = [NewsRecord(id="x1", text="Barack Obama met Angela Merkel.", label=1, entities=[], contexts={}, meta={})]
  * cfg = ELConfig(backend="dummy", lexicon_path="./lexicon.en.json", case_sensitive=False)
  * out = link_records(records, cfg, inplace=False)
