@@ -41,6 +41,7 @@ from datetime import datetime, timezone
 import json
 import logging
 import time
+import os
 
 # Stable NewsRecord schema
 from kan.data.loaders import NewsRecord
@@ -71,6 +72,10 @@ except Exception:  # pragma: no cover - registry may be unavailable at import ti
     _KG_REG = _DummyReg()  # type: ignore
 
 LOGGER = logging.getLogger("kan.pipelines.kg_fetcher")
+
+_ENV_TTL_DAYS = "KAN_KG_CACHE_TTL_DAYS"  # 默认 7
+_ENV_MAX_WORKERS = "KAN_KG_MAX_WORKERS"  # 默认 min(32, cpu*5)
+_ENV_USE_JSONL_INDEX = "KAN_KG_LOCAL_JSONL"  # "1" 时把 local_path 当作 JSONL
 
 # -----------------------------------------------------------------------------
 # Config
@@ -127,6 +132,10 @@ class _Cache:
         self.backend_sig = backend_sig
         if self.dir:
             self.dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self.ttl_days = int(os.environ.get(_ENV_TTL_DAYS, "7"))
+        except Exception:
+            self.ttl_days = 7
 
     def _key(self, qid: str) -> Path:
         # Stable shard by backend signature and QID
@@ -144,6 +153,17 @@ class _Cache:
             return None
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
+            # backward compatible: old cache may not have "ts"
+            ts = data.get("ts")
+            if ts:
+                from datetime import datetime, timezone, timedelta
+
+                try:
+                    dt = datetime.fromisoformat(ts)
+                    if (datetime.now(timezone.utc) - dt).days > self.ttl_days:
+                        return None  # expired
+                except Exception:
+                    pass
             v = data.get("neighbors", [])
             if isinstance(v, list):
                 return [str(x) for x in v]
@@ -156,9 +176,8 @@ class _Cache:
             return
         p = self._key(qid)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(
-            json.dumps({"neighbors": neighbors}, ensure_ascii=False), encoding="utf-8"
-        )
+        payload = {"neighbors": neighbors, "ts": _now_iso()}
+        p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
 # -----------------------------------------------------------------------------
@@ -192,23 +211,62 @@ class LocalProvider(BaseProvider):
 
     def __init__(self, cfg: KGConfig) -> None:
         super().__init__(cfg)
-        self.index: Dict[str, List[str]] = {}
+        self.index: Dict[str, List[str]] = {}  # single-file JSON cache
+        self._jsonl_offsets: Dict[str, int] = {}  # qid -> byte offset (JSONL)
+        self._jsonl_fp: Optional[io.BufferedReader] = None
+        self._lru: Dict[str, List[str]] = {}
+        self._lru_cap = 4096  # tiny hotset
         path = Path(cfg.local_path) if cfg.local_path else None
         if path and path.exists():
-            if path.is_file():
+            import io
+
+            # Prefer JSONL when env enabled or file endswith .jsonl
+            use_jsonl = (
+                os.environ.get(_ENV_USE_JSONL_INDEX, "0") == "1"
+                or path.suffix.lower() == ".jsonl"
+            )
+            if use_jsonl:
+                # build a lightweight offset index: one pass, store qid -> offset
+                self._jsonl_fp = open(path, "rb")
+                pos = 0
+                for line in self._jsonl_fp:
+                    try:
+                        obj = json.loads(line)
+                        qid = str(obj.get("qid", ""))
+                        if qid.startswith("Q"):
+                            self._jsonl_offsets[qid] = pos
+                    except Exception:
+                        pass
+                    pos = self._jsonl_fp.tell()
+            else:
+                # original single-file JSON (may be huge)
                 try:
                     self.index = json.loads(path.read_text(encoding="utf-8"))
                 except Exception:
                     self.index = {}
-            else:
-                # directory mode: defer IO to fetch()
-                self.index = {}
+        else:
+            # directory mode: defer IO to fetch()
+            self.index = {}
         LOGGER.info("LocalProvider ready: path=%s", str(path) if path else None)
 
     def fetch(self, qid: str) -> List[Tuple[str, Optional[str]]]:
-        # In-memory single-file index
+        # LRU hot cache for directory/JSONL modes
+        if qid in self._lru:
+            return [(x.split("=",1)[-1] if "=" in x else x,
+                     x.split("=",1)[0] if "=" in x else None) for x in self._lru[qid]]
+        raw: List[str] = []
         if self.index:
             raw = self.index.get(qid, [])
+        elif self._jsonl_offsets:
+            # random access JSONL
+            try:
+                off = self._jsonl_offsets.get(qid)
+                if off is not None and self._jsonl_fp:
+                    self._jsonl_fp.seek(off)
+                    obj = json.loads(self._jsonl_fp.readline())
+                    raw = obj.get("neighbors", [])
+            except Exception:
+                raw = []
         else:
             # directory mode: {dir}/{qid}.json with {"neighbors": [ ... ]}
             if not self.cfg.local_path:
@@ -228,6 +286,14 @@ class LocalProvider(BaseProvider):
                     out.append((val, prop))
             elif isinstance(x, str) and x.startswith("Q"):
                 out.append((x, None))
+        # put into tiny LRU for hot reuse
+        try:
+            if raw:
+                if len(self._lru) >= self._lru_cap:
+                    self._lru.pop(next(iter(self._lru)))
+                self._lru[qid] = raw
+        except Exception:
+            pass
         return out
 
 
@@ -386,9 +452,14 @@ def fetch_context(
 
     cache = _Cache(cfg.cache_dir, backend_sig)
 
-    # Rate limit state
+    # Rate limit (approx) & concurrency
     last_req_ts = 0.0
     rps = cfg.rate_limit if cfg.rate_limit and cfg.rate_limit > 0 else None
+    try:
+       import os
+       max_workers = int(os.environ.get(_ENV_MAX_WORKERS, "0")) or max(4, min(32, (os.cpu_count() or 8)*5))
+    except Exception:
+       max_workers = 16
 
     total_q = 0
     cache_hit = 0
@@ -402,51 +473,57 @@ def fetch_context(
     uniq_qids = sorted(set(qids))
 
     qid2neighbors: Dict[str, List[str]] = {}
+    errors: List[Dict[str, str]] = []
 
-    for qid in uniq_qids:
-        total_q += 1
+    import threading, time
+    lock = threading.Lock()
+    # naive rate limiter: serialize "outbound" by sleeping per rps
+    rate_lock = threading.Lock()
+
+    def _work(qid: str) -> None:
+        nonlocal cache_hit, total_q, last_req_ts
+        with lock:
+            total_q += 1
+        # cache
         cached = cache.get(qid)
         if cached is not None:
-            qid2neighbors[qid] = cached
-            cache_hit += 1
-            continue
-        # throttle if needed
+            with lock:
+                qid2neighbors[qid] = cached
+                cache_hit += 1
+            return
+        # throttle (approx)
         if rps:
-            now = time.time()
-            min_interval = 1.0 / rps
-            sleep_t = last_req_ts + min_interval - now
-            if sleep_t > 0:
-                time.sleep(sleep_t)
-            last_req_ts = time.time()
-        # fetch from provider
-        pairs = provider.fetch(qid)
-        # filter by properties/direction if applicable (direction is advisory here)
-        if cfg.properties:
-            pairs = [
-                (n, p)
-                for (n, p) in pairs
-                if (p in cfg.properties) or (p is None and cfg.return_edges == "none")
-            ]
-        # normalize output
-        if cfg.return_edges == "labeled":
-            neighbors = [f"{p}={n}" if p else n for (n, p) in pairs]
-        else:
-            neighbors = [n for (n, _p) in pairs]
-        # dedupe & top-k
-        neighbors = _unique_preserve(neighbors)
-        if cfg.topk is not None and cfg.topk > 0:
-            neighbors = neighbors[: cfg.topk]
-        qid2neighbors[qid] = neighbors
-        cache.put(qid, neighbors)
+            with rate_lock:
+                now = time.time()
+                min_interval = 1.0 / rps
+                sleep_t = last_req_ts + min_interval - now
+                if sleep_t > 0:
+                    time.sleep(sleep_t)
+                last_req_ts = time.time()
+        # fetch + isolate errors
+        try:
+            pairs = provider.fetch(qid)
+            if cfg.properties:
+                pairs = [(n,p) for (n,p) in pairs if (p in cfg.properties) or (p is None and cfg.return_edges=="none")]
+            neighbors = [f"{p}={n}" if (cfg.return_edges=="labeled" and p) else n for (n,p) in pairs]
+            neighbors = _unique_preserve(neighbors)
+            if cfg.topk is not None and cfg.topk > 0:
+                neighbors = neighbors[: cfg.topk]
+            cache.put(qid, neighbors)
+            with lock:
+                qid2neighbors[qid] = neighbors
+        except Exception as e:
+            LOGGER.warning("KG fetch failed for %s: %s", qid, e)
+            with lock:
+                qid2neighbors[qid] = []
+                errors.append({"qid": qid, "error": str(e)})
 
-    # write back to records
-    for rec in out:
-        ctx: Dict[str, List[str]] = {}
-        for q in rec.entities or []:
-            ns = qid2neighbors.get(q, [])
-            if ns:
-                ctx[q] = list(ns)
-        rec.contexts = ctx
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = [ex.submit(_work, q) for q in uniq_qids]
+        for _ in as_completed(futures):
+            pass  # join
+
         # traceability
         rec.meta = dict(rec.meta or {})
         rec.meta.setdefault("kg", {})
