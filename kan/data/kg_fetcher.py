@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 """
-@file   kan/pipelines/kg_fetcher.py
+@file   kan/data/kg_fetcher.py
 @brief  Knowledge-graph context fetcher for KAN: fetch 1-hop neighbors for entities.
 @date   2025-09-16
 
@@ -29,7 +29,7 @@ from __future__ import annotations
 @notes
   - 本模块仅负责**邻接获取**（一跳为主）。更复杂的子图裁剪/路径搜索可在上游 pipeline 扩展。
   - 远端网络后端默认不启用；LocalProvider 提供零依赖可运行路径，利于 CI。
-  - 统一日志命名空间：`kan.pipelines.kg_fetcher`。
+  - 统一日志命名空间：`kan.data.kg_fetcher`。
 """
 
 from dataclasses import dataclass, asdict, field
@@ -37,6 +37,7 @@ from hashlib import blake2b
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from pathlib import Path
 from copy import deepcopy
+import io
 from datetime import datetime, timezone
 import json
 import logging
@@ -71,11 +72,12 @@ except Exception:  # pragma: no cover - registry may be unavailable at import ti
 
     _KG_REG = _DummyReg()  # type: ignore
 
-LOGGER = logging.getLogger("kan.pipelines.kg_fetcher")
+LOGGER = logging.getLogger("kan.data.kg_fetcher")
 
 _ENV_TTL_DAYS = "KAN_KG_CACHE_TTL_DAYS"  # 默认 7
 _ENV_MAX_WORKERS = "KAN_KG_MAX_WORKERS"  # 默认 min(32, cpu*5)
 _ENV_USE_JSONL_INDEX = "KAN_KG_LOCAL_JSONL"  # "1" 时把 local_path 当作 JSONL
+_ENV_CACHE_DISABLE = "KAN_KG_CACHE_DISABLE"  # "1" 时完全禁用缓存（测试/调试友好）
 
 # -----------------------------------------------------------------------------
 # Config
@@ -127,6 +129,20 @@ class KGConfig:
 
 
 class _Cache:
+    """Per-QID cache for KG fetch results.
+
+    @zh
+      - 每个 QID 一个 JSON 文件
+      - 键路径包含完整 hash，避免跨配置覆盖
+      - TTL 默认 7 天，可通过环境变量 KAN_KG_CACHE_TTL_DAYS 调整
+      - 可通过 KAN_KG_CACHE_DISABLE=1 全局禁用缓存
+    @en
+      - One JSON per QID
+      - Key path includes full hash to avoid collisions across configs
+      - TTL defaults to 7 days, overridable by env KAN_KG_CACHE_TTL_DAYS
+      - Can be globally disabled by KAN_KG_CACHE_DISABLE=1
+    """
+
     def __init__(self, dir_: Optional[str], backend_sig: str) -> None:
         self.dir = Path(dir_) if dir_ else None
         self.backend_sig = backend_sig
@@ -136,34 +152,27 @@ class _Cache:
             self.ttl_days = int(os.environ.get(_ENV_TTL_DAYS, "7"))
         except Exception:
             self.ttl_days = 7
+        self.disabled = os.environ.get(_ENV_CACHE_DISABLE, "0") == "1"
 
     def _key(self, qid: str) -> Path:
-        # Stable shard by backend signature and QID
+        """Stable path: {dir}/{h[:2]}/{h[2:4]}/{h}-{qid}.json"""
         h = blake2b(
-            (self.backend_sig + "\n" + qid).encode("utf-8"), digest_size=12
+            (self.backend_sig + "\n" + qid).encode("utf-8"),
+            digest_size=16,
         ).hexdigest()
         assert self.dir is not None
-        return self.dir / h[:2] / f"{qid}.json"
+        return self.dir / h[:2] / h[2:4] / f"{h}-{qid}.json"
 
-    def get(self, qid: str) -> Optional[List[str]]:
-        if not self.dir:
-            return None
-        p = self._key(qid)
-        if not p.parent.exists() or not p.exists():
-            return None
+    def _read_entry(self, p: Path) -> Optional[List[str]]:
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
-            # backward compatible: old cache may not have "ts"
             ts = data.get("ts")
             if ts:
-                from datetime import datetime, timezone, timedelta
+                from datetime import datetime, timezone
 
-                try:
-                    dt = datetime.fromisoformat(ts)
-                    if (datetime.now(timezone.utc) - dt).days > self.ttl_days:
-                        return None  # expired
-                except Exception:
-                    pass
+                dt = datetime.fromisoformat(ts)
+                if (datetime.now(timezone.utc) - dt).days > self.ttl_days:
+                    return None
             v = data.get("neighbors", [])
             if isinstance(v, list):
                 return [str(x) for x in v]
@@ -171,13 +180,23 @@ class _Cache:
             return None
         return None
 
+    def get(self, qid: str) -> Optional[List[str]]:
+        if not self.dir or self.disabled:
+            return None
+        p = self._key(qid)
+        if p.exists():
+            return self._read_entry(p)
+        return None
+
     def put(self, qid: str, neighbors: List[str]) -> None:
-        if not self.dir:
+        if not self.dir or self.disabled:
             return
         p = self._key(qid)
         p.parent.mkdir(parents=True, exist_ok=True)
         payload = {"neighbors": neighbors, "ts": _now_iso()}
-        p.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, p)
 
 
 # -----------------------------------------------------------------------------
@@ -198,6 +217,12 @@ class BaseProvider:
         """
         raise NotImplementedError
 
+    # --- cache scope hook ----------------------------------------------------
+    def cache_scope(self) -> Mapping[str, Any]:
+        """Provider-specific identity for cache namespacing.
+        Override to include data-source identity (e.g., file path, endpoint)."""
+        return {}
+
 
 # -----------------------------------------------------------------------------
 # Local provider (zero dependency, CI friendly)
@@ -212,13 +237,18 @@ class LocalProvider(BaseProvider):
     def __init__(self, cfg: KGConfig) -> None:
         super().__init__(cfg)
         self.index: Dict[str, List[str]] = {}  # single-file JSON cache
+        self._path_str: Optional[str] = None  # normalized absolute path for cache scope
         self._jsonl_offsets: Dict[str, int] = {}  # qid -> byte offset (JSONL)
         self._jsonl_fp: Optional[io.BufferedReader] = None
         self._lru: Dict[str, List[str]] = {}
         self._lru_cap = 4096  # tiny hotset
+
         path = Path(cfg.local_path) if cfg.local_path else None
         if path and path.exists():
-            import io
+            try:
+                self._path_str = str(path.resolve())
+            except Exception:
+                self._path_str = str(path)
 
             # Prefer JSONL when env enabled or file endswith .jsonl
             use_jsonl = (
@@ -252,8 +282,13 @@ class LocalProvider(BaseProvider):
     def fetch(self, qid: str) -> List[Tuple[str, Optional[str]]]:
         # LRU hot cache for directory/JSONL modes
         if qid in self._lru:
-            return [(x.split("=",1)[-1] if "=" in x else x,
-                     x.split("=",1)[0] if "=" in x else None) for x in self._lru[qid]]
+            return [
+                (
+                    x.split("=", 1)[-1] if "=" in x else x,
+                    x.split("=", 1)[0] if "=" in x else None,
+                )
+                for x in self._lru[qid]
+            ]
         raw: List[str] = []
         if self.index:
             raw = self.index.get(qid, [])
@@ -295,6 +330,10 @@ class LocalProvider(BaseProvider):
         except Exception:
             pass
         return out
+
+    def cache_scope(self) -> Mapping[str, Any]:
+        # Distinguish different local datasets (file/dir/jsonl) by absolute path
+        return {"local_path": self._path_str}
 
 
 # -----------------------------------------------------------------------------
@@ -438,6 +477,14 @@ def fetch_context(
 
     provider = build_provider(cfg)
 
+    # provider-specific scope (e.g., data-source identity)
+    scope = {}
+    if hasattr(provider, "cache_scope"):
+        try:
+            scope = dict(provider.cache_scope()) or {}
+        except Exception:
+            scope = {}
+
     backend_sig = json.dumps(
         {
             "backend": provider.__class__.__name__,
@@ -446,6 +493,7 @@ def fetch_context(
             "properties": tuple(cfg.properties) if cfg.properties else None,
             "direction": cfg.direction,
             "topk": cfg.topk,
+            "scope": scope,
         },
         sort_keys=True,
     )
@@ -456,10 +504,13 @@ def fetch_context(
     last_req_ts = 0.0
     rps = cfg.rate_limit if cfg.rate_limit and cfg.rate_limit > 0 else None
     try:
-       import os
-       max_workers = int(os.environ.get(_ENV_MAX_WORKERS, "0")) or max(4, min(32, (os.cpu_count() or 8)*5))
+        import os
+
+        max_workers = int(os.environ.get(_ENV_MAX_WORKERS, "0")) or max(
+            4, min(32, (os.cpu_count() or 8) * 5)
+        )
     except Exception:
-       max_workers = 16
+        max_workers = 16
 
     total_q = 0
     cache_hit = 0
@@ -476,6 +527,7 @@ def fetch_context(
     errors: List[Dict[str, str]] = []
 
     import threading, time
+
     lock = threading.Lock()
     # naive rate limiter: serialize "outbound" by sleeping per rps
     rate_lock = threading.Lock()
@@ -484,13 +536,27 @@ def fetch_context(
         nonlocal cache_hit, total_q, last_req_ts
         with lock:
             total_q += 1
-        # cache
+
         cached = cache.get(qid)
         if cached is not None:
+            # 归一化缓存：确保与当前 return_edges 契约一致（幂等）
+            if cfg.return_edges == "none":
+                # "Pxx=Qyy" -> "Qyy"
+                cached_norm = [
+                    (c.split("=", 1)[-1] if isinstance(c, str) and "=" in c else c)
+                    for c in cached
+                ]
+            else:  # "labeled"
+                # 若缓存里意外有纯 QID，则补全为 "P?=Q" 形式。由于我们不知道属性，
+                # 保守策略：若无 "=", 原样保留（避免错误地捏造属性）
+                cached_norm = [
+                    (c if (isinstance(c, str) and "=" in c) else c) for c in cached
+                ]
             with lock:
-                qid2neighbors[qid] = cached
+                qid2neighbors[qid] = cached_norm
                 cache_hit += 1
             return
+
         # throttle (approx)
         if rps:
             with rate_lock:
@@ -504,8 +570,16 @@ def fetch_context(
         try:
             pairs = provider.fetch(qid)
             if cfg.properties:
-                pairs = [(n,p) for (n,p) in pairs if (p in cfg.properties) or (p is None and cfg.return_edges=="none")]
-            neighbors = [f"{p}={n}" if (cfg.return_edges=="labeled" and p) else n for (n,p) in pairs]
+                pairs = [
+                    (n, p)
+                    for (n, p) in pairs
+                    if (p in cfg.properties)
+                    or (p is None and cfg.return_edges == "none")
+                ]
+            neighbors = [
+                f"{p}={n}" if (cfg.return_edges == "labeled" and p) else n
+                for (n, p) in pairs
+            ]
             neighbors = _unique_preserve(neighbors)
             if cfg.topk is not None and cfg.topk > 0:
                 neighbors = neighbors[: cfg.topk]
@@ -519,20 +593,35 @@ def fetch_context(
                 errors.append({"qid": qid, "error": str(e)})
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
+
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = [ex.submit(_work, q) for q in uniq_qids]
         for _ in as_completed(futures):
             pass  # join
 
-        # traceability
-        rec.meta = dict(rec.meta or {})
-        rec.meta.setdefault("kg", {})
-        rec.meta["kg"].update(
+    # === Write-back phase: fill contexts & meta per record ===
+    for rec in out:
+        # ensure contexts is a dict
+        try:
+            ctx = getattr(rec, "contexts", None)
+        except Exception:
+            ctx = None
+        if not isinstance(ctx, dict):
+            setattr(rec, "contexts", {})
+        # fill per-entity neighbors
+        ents = getattr(rec, "entities", None) or []
+        for q in ents:
+            if isinstance(q, str) and q.startswith("Q"):
+                rec.contexts[q] = qid2neighbors.get(q, [])
+        # traceability meta
+        meta = dict(getattr(rec, "meta", {}) or {})
+        kg_meta = dict(meta.get("kg", {}) or {})
+        kg_meta.update(
             {
                 "backend": provider.__class__.__name__,
                 "version": getattr(provider, "version", "0"),
                 "time": _now_iso(),
-                "qids": list(rec.entities or []),
+                "qids": list(ents),
                 "stats": {
                     "uniq_qids": len(uniq_qids),
                     "total_q": total_q,
@@ -543,6 +632,8 @@ def fetch_context(
                 "properties": list(cfg.properties) if cfg.properties else None,
             }
         )
+        meta["kg"] = kg_meta
+        setattr(rec, "meta", meta)
 
     LOGGER.info(
         "KG fetch done: records=%d, uniq_qids=%d, cache_hit=%d, backend=%s/%s",
@@ -583,7 +674,7 @@ __doc_examples__ = r"""
  * @zh 用法（Local provider, 单文件索引）：
  * ```python
  * from kan.data.loaders import NewsRecord
- * from kan.pipelines.kg_fetcher import KGConfig, fetch_context
+ * from kan.data.kg_fetcher import KGConfig, fetch_context
  * # local JSON 形如：{"Q76": ["Q30","P31=Q5"], "Q567": ["Q183","P27=Q183"]}
  * cfg = KGConfig(backend="local", local_path="./kg.local.json", return_edges="labeled", topk=32)
  * recs = [NewsRecord(id="x1", text="...", label=1, entities=["Q76","Q567"], contexts={}, meta={})]
