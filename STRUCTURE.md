@@ -162,14 +162,14 @@
 │       ├─ extracted/                   # 解压后的原始文件树
 │       ├─ processed/                   # 规范化后的文件（parquet/csv/jsonl）
 │       └─ dataset_card.json
-├─ cache/                               # 过程缓存（可复用）
+├─ .cache/                               # 过程缓存（可复用）
 │  ├─ datasets/<name>/<fingerprint>/
 │  │  ├─ raw/                           # 原始镜像（*.jsonl.gz，可选）
 │  │  ├─ prepared/<split>/              # 清洗/增强后的分片
 │  │  │  ├─ shard-00001.jsonl.gz
 │  │  │  └─ stats.json
 │  │  ├─ meta/vocabs/                   # 词表（batcher 持久化）
-│  │  └─ manifest.json                  # 可消费清单（见 §2.5）
+│  │  └─ manifest.json                  # 可消费清单
 │  └─ kg/                               # 知识抓取缓存（由 kg_fetcher 实现）
 ├─ runs/
 │  ├─ <run_id>/
