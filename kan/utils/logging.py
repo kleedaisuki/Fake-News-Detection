@@ -32,10 +32,17 @@ import atexit
 import json
 import logging
 import logging.config
+import sys
 import os
 import time
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
-from queue import Queue
+import multiprocessing as mp
+
+# 注：避免在多进程路径下误用线程队列（queue.Queue）
+try:
+    import queue as _thread_queue  # 仅用于单进程或线程场景
+except Exception:  # pragma: no cover
+    _thread_queue = None
 
 __all__ = [
     "configure_logging",
@@ -186,6 +193,152 @@ class RateLimitFilter(logging.Filter):
             self.bucket[key] = (count + 1, start)
             return True
         return False
+
+
+class _LiveSysStdout:
+    """@brief 面向 capsys 的“活的 stdout 代理”（Chinese）/ Live proxy to current sys.stdout (English).
+    @zh 每次 write/flush 都转发到“此刻的 sys.stdout”，避免 pytest 重置 stdout 后出现
+        I/O on closed file。close() 为 no-op，防止误关真实 stdout。
+    @en Forward write/flush to the current sys.stdout at call time so that pytest capsys
+        resets won't break the handler; close() is a no-op.
+    """
+
+    def write(self, s: str) -> int:
+        return sys.stdout.write(s)
+
+    def flush(self) -> None:
+        sys.stdout.flush()
+
+    def close(self) -> None:
+        # never close the real stdout
+        pass
+
+    # 某些库会探测 isatty；保守返回 False
+    def isatty(self) -> bool:
+        try:
+            return bool(getattr(sys.stdout, "isatty", lambda: False)())
+        except Exception:
+            return False
+
+
+# ============================================================================
+# 多进程日志辅助 (_mp) —— 显式“主进程监听 / 子进程投递”两步式
+# Multiprocessing logging helpers (_mp)
+# ============================================================================
+
+# 这些全局仅在主进程内有效（持有监听器与队列）
+_MP_CTX: Optional[mp.context.BaseContext] = None
+_MP_Q: Optional["mp.queues.Queue"] = None
+_MP_QL: Optional["QueueListener"] = None
+
+
+def _get_ctx(start_method: Optional[str]) -> "mp.context.BaseContext":
+    """
+    @brief 返回指定 start_method 的 multiprocessing 上下文（Chinese）/ Get multiprocessing context with given start method (English).
+    @param start_method 启动方式："spawn" | "fork" | "forkserver" 或 None / Start method or None
+    @return 对应的 BaseContext / The BaseContext instance
+    """
+    return mp.get_context(start_method) if start_method else mp.get_context()
+
+
+def _is_main_process() -> bool:
+    """
+    @brief 判断当前是否主进程（Chinese）/ Check if current process is MainProcess (English).
+    @return True 表示主进程 / True if main process
+    """
+    try:
+        return mp.current_process().name == "MainProcess"
+    except Exception:
+        return True
+
+
+def start_listener_main(
+    *,
+    log_dir: "Path",
+    level_name: str,
+    fmt: str,
+    rate_limit: Optional[tuple],
+    start_method: Optional[str] = None,
+) -> "mp.queues.Queue":
+    """
+    @brief 启动主进程日志监听器（单点写入），并返回可跨进程共享的 mp.Queue（Chinese）
+           Start main-process QueueListener (single sink) and return mp.Queue (English).
+    @param log_dir 日志目录 / Directory for log files
+    @param level_name 控制台等级名（INFO/DEBUG...）/ Console level name
+    @param fmt "human" | "json"
+    @param rate_limit 节流配置 (capacity, window_s) 或 None / Rate limit tuple or None
+    @param start_method 进程启动方式（可选）/ Optional start method
+    @return 用于子进程投递的 mp.Queue / The mp.Queue to pass to workers
+    @note 仅应在主进程调用一次；重复调用返回同一队列 / Should be called once in main; re-entrant.
+    """
+    global _MP_CTX, _MP_Q, _MP_QL
+    if _MP_QL is not None and _MP_Q is not None:
+        return _MP_Q
+
+    _MP_CTX = _get_ctx(start_method)
+    _MP_Q = _MP_CTX.Queue(-1)
+
+    # === 监听端的“单写” handlers（控制台 + 文件）===
+    console = logging.StreamHandler(_LiveSysStdout())
+    level_no = getattr(logging, level_name.upper(), logging.INFO)
+    console.setLevel(level_no)
+    if fmt == "json":
+        console.setFormatter(JsonFormatter2())
+    else:
+        console.setFormatter(
+            SafeFormatter(
+                "[%(asctime)s] %(levelname)s %(name)s | run=%(run_id)s "
+                "stage=%(stage)s step=%(step)s | %(message)s"
+            )
+        )
+
+    file_h = RotatingFileHandler(
+        str(Path(log_dir) / "kan-debug.log"),
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    file_h.setLevel(logging.DEBUG)
+    file_h.setFormatter(JsonFormatter2())
+
+    # 过滤器保持与原实现一致（集中生效在监听端）
+    for h in (console, file_h):
+        h.addFilter(ContextFilter())
+        h.addFilter(MaskFilter())
+        if rate_limit:
+            cap, win = rate_limit
+            h.addFilter(RateLimitFilter(capacity=cap, window_s=win))
+
+    _MP_QL = QueueListener(_MP_Q, console, file_h, respect_handler_level=True)
+    _MP_QL.start()
+
+    import atexit
+
+    atexit.register(lambda: (_MP_QL.stop() if _MP_QL else None))
+    return _MP_Q
+
+
+def install_queue_handler_worker(
+    q: "mp.queues.Queue", logger_name: str = "kan"
+) -> None:
+    """
+    @brief 在当前进程为指定 logger 安装 QueueHandler（只投递，不直写）（Chinese）
+           Install QueueHandler for given logger in this process (producer only) (English).
+    @param q 由主进程创建的 mp.Queue / The mp.Queue created in main process
+    @param logger_name 目标 logger 名称 / Target logger name
+    @note 幂等：重复调用不会产生多重 QueueHandler（Chinese & English）
+    """
+    log = logging.getLogger(logger_name)
+    # 移除非队列 handler，避免直写到控制台/文件
+    for h in list(log.handlers):
+        if not isinstance(h, QueueHandler):
+            log.removeHandler(h)
+    if not any(isinstance(h, QueueHandler) for h in log.handlers):
+        qh = QueueHandler(q)
+        qh.setLevel(logging.DEBUG)
+        log.addHandler(qh)
+    log.propagate = False
+    log.setLevel(logging.DEBUG)
 
 
 # ----------------------------- 默认配置 / Default DictConfig -----------------------------
@@ -374,24 +527,42 @@ def configure_logging(
     # 4) 应用配置
     logging.config.dictConfig(config)
 
-    # 5) 如启用多进程：将 "kan" logger 的 handlers 交由 QueueListener 管理
-    global _QL, _Q
-    if multiproc and _QL is None:
-        _Q = Queue(-1)
-        logger_kan = logging.getLogger("kan")
-        # 若外部配置没给 handler，尝试从 root 继承一个 console
-        handlers = list(logger_kan.handlers)
-        if not handlers:
-            handlers = list(logging.getLogger().handlers)
-        for h in handlers:
-            logger_kan.removeHandler(h)
-        qh = QueueHandler(_Q)
-        qh.setLevel(logging.DEBUG)
-        logger_kan.addHandler(qh)
-        _QL = QueueListener(_Q, *handlers, respect_handler_level=True)
-        _QL.start()
-        atexit.register(lambda: (_QL.stop() if _QL else None))
+    # 5) 多进程处理（新实现：主进程单写，所有进程只投递）
+    if multiproc:
+        # 可选：允许通过环境变量明确指定 start method（默认按解释器策略）
+        start_method = os.environ.get("KAN_LOG_MP_START", None)  # "spawn"|"fork"|"forkserver"|None
 
+        if _is_main_process():
+            # 主进程启动监听器并获取跨进程队列
+            q = start_listener_main(
+                log_dir=log_dir or Path("./logs"),
+                level_name=(level or "INFO"),
+                fmt=fmt,
+                rate_limit=rate_limit,
+                start_method=start_method,
+            )
+            # 主进程自身也统一通过队列投递（路径一致，便于切换/测试）
+            install_queue_handler_worker(q, logger_name="kan")
+            # 将队列暴露给调用方（若你已有全局 _Q，可同步一下）
+            globals()["_Q"] = q  # 向后兼容：如项目内其它模块会读取 _Q
+        else:
+            # 子进程不应自启监听器。建议：由调用方把 q 显式传参进来，
+            # 并在子进程入口处调用 install_queue_handler_worker(q)。
+            # 这里仅保证当前进程不会直写：
+            log = logging.getLogger("kan")
+            for h in list(log.handlers):
+                if not isinstance(h, QueueHandler):
+                    log.removeHandler(h)
+            log.propagate = False
+            log.setLevel(logging.DEBUG)
+
+        # 兜底：确保 "kan" 不再直写任何 handler（主/子一致走队列）
+        _kan = logging.getLogger("kan")
+        for h in list(_kan.handlers):
+            if not isinstance(h, QueueHandler):
+                _kan.removeHandler(h)
+        _kan.propagate = False
+        _kan.setLevel(logging.DEBUG)
     # 6) 降噪：第三方库提升到 WARNING（保持原行为）
     for noisy in (
         "urllib3",
@@ -418,7 +589,8 @@ def _install_exception_hooks() -> None:
     sys.excepthook = _excepthook
 
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
         def _async_handler(loop, ctx):
             # 尽量保留原上下文，但避免不可序列化对象
