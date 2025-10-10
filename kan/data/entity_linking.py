@@ -349,7 +349,15 @@ def link_records(
     num_cache_hit = 0
     num_linked = 0
 
-    for rec in out:
+    # 1) 计算 inplace 的有效值（effective_inplace）
+    _inplace = (
+        bool(inplace) if inplace is not None else bool(getattr(cfg, "inplace", False))
+    )
+
+    # 2) 准备“非就地”输出容器
+    out_records: List[NewsRecord] = []
+
+    for i, rec in enumerate(out):
         text = rec.text or ""
         mentions = cache.get(text)
         if mentions is None:
@@ -364,11 +372,11 @@ def link_records(
         qids = sorted({m.qid for m in mentions if m.qid})  # type: ignore[arg-type]
         if qids:
             num_linked += 1
-        rec.entities = list(qids)
-        # Traceability
-        rec.meta = dict(rec.meta or {})
-        rec.meta.setdefault("el", {})
-        rec.meta["el"].update(
+
+        # ---- 构造新的 meta（避免对 frozen 实例字段重绑定） ----
+        new_meta = dict(rec.meta or {})
+        el_meta = dict(new_meta.get("el") or {})
+        el_meta.update(
             {
                 "backend": linker.__class__.__name__,
                 "version": getattr(linker, "version", "0"),
@@ -378,6 +386,41 @@ def link_records(
                 "mentions": [asdict(m) for m in mentions],
             }
         )
+        new_meta["el"] = el_meta
+
+        # ---- 构造新的样本实例（兼容 frozen dataclass）----
+        try:
+            from dataclasses import replace, is_dataclass
+
+            if is_dataclass(rec):
+                new_rec = replace(rec, entities=list(qids), meta=new_meta)
+            else:
+                # 兜底：非 dataclass 时，回退为新建同构对象
+                new_rec = NewsRecord(
+                    id=rec.id,
+                    text=rec.text,
+                    label=rec.label,
+                    entities=list(qids),
+                    contexts=rec.contexts,
+                    meta=new_meta,
+                )
+        except Exception:
+            # 保守兜底（绝不在此 silent fail）
+            new_rec = NewsRecord(
+                id=rec.id,
+                text=rec.text,
+                label=rec.label,
+                entities=list(qids),
+                contexts=rec.contexts,
+                meta=new_meta,
+            )
+
+        # ---- 应用 inplace 语义 ----
+        if _inplace:
+            # “就地”的含义：不更换列表对象，但替换其中的元素引用
+            out[i] = new_rec
+        else:
+            out_records.append(new_rec)
 
     LOGGER.info(
         "EL done: records=%d, linked=%d, cache_hit=%d, backend=%s/%s",
@@ -387,7 +430,7 @@ def link_records(
         linker.__class__.__name__,
         getattr(linker, "version", "0"),
     )
-    return out
+    return out if _inplace else out_records
 
 
 # -----------------------------------------------------------------------------
