@@ -61,7 +61,7 @@ except Exception:  # pragma: no cover
     # 允许相对导入失败时再尝试绝对路径（取决于包布局）
     from .text_encoder import BaseTextEncoder, HFTextEncoder, TextEncoderConfig, build_text_encoder  # type: ignore
 
-logger = logging.getLogger("kan.context_encoder")
+logger = logging.getLogger("kan.modules.context_encoder")
 
 
 # -----------------------------------------------------------------------------

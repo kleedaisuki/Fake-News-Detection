@@ -530,7 +530,9 @@ def configure_logging(
     # 5) 多进程处理（新实现：主进程单写，所有进程只投递）
     if multiproc:
         # 可选：允许通过环境变量明确指定 start method（默认按解释器策略）
-        start_method = os.environ.get("KAN_LOG_MP_START", None)  # "spawn"|"fork"|"forkserver"|None
+        start_method = os.environ.get(
+            "KAN_LOG_MP_START", None
+        )  # "spawn"|"fork"|"forkserver"|None
 
         if _is_main_process():
             # 主进程启动监听器并获取跨进程队列

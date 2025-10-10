@@ -71,7 +71,7 @@ except Exception as e:  # pragma: no cover
 # Logging
 # -----------------------------------------------------------------------------
 # 命名空间式的 logger，便于在全局 logging 配置中精确控制该模块的日志级别
-logger = logging.getLogger("kan.text_encoder")
+logger = logging.getLogger("kan.modules.text_encoder")
 
 
 # -----------------------------------------------------------------------------

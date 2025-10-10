@@ -47,7 +47,7 @@ import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
 
-logger = logging.getLogger("kan.head")
+logger = logging.getLogger("kan.modules.head")
 
 
 # -----------------------------------------------------------------------------
@@ -225,11 +225,21 @@ class Head(nn.Module):
             raise ValueError(f"未知的 fusion 策略: {cfg.fusion}")
 
         # 融合后 LN（首次 forward 时动态创建，随后复用）
-        if cfg.layernorm:
+        if self.cfg.layernorm:
             if self._post_fuse_ln is None:
-                self._post_fuse_ln = nn.LayerNorm(fused.shape[-1])
-                # 将动态创建的层注册进模块，以便保存/加载
-                self.add_module("post_fuse_ln", self._post_fuse_ln)
+                # 1) 先构造，再以稳定名字注册到模块层级
+                ln = nn.LayerNorm(fused.shape[-1])
+                # 2) 确保与 fused 同 device/dtype（AMP 下 dtype 也对齐）
+                ln = ln.to(device=fused.device, dtype=fused.dtype)
+                # 3) 正式注册，名字固定为 "post_fuse_ln"
+                self.add_module("post_fuse_ln", ln)
+                # 4) 让内部缓存指向**同一实例**，避免后续引用漂移
+                self._post_fuse_ln = ln
+            else:
+                # 保险：如果延迟创建在 CPU，下一次前传也强制对齐
+                self._post_fuse_ln = self._post_fuse_ln.to(
+                    device=fused.device, dtype=fused.dtype
+                )
             fused = self._post_fuse_ln(fused)
 
         fused = self.dropout(fused)

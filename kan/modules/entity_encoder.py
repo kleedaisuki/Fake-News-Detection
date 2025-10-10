@@ -53,7 +53,7 @@ from pathlib import Path
 import torch
 from torch import nn, Tensor
 
-logger = logging.getLogger("kan.entity_encoder")
+logger = logging.getLogger("kan.modules.entity_encoder")
 
 
 # -----------------------------------------------------------------------------
