@@ -10,8 +10,8 @@ source:
   paper_ref: KAN-2020
 
 paths:
-  raw_dir: data/raw/politifact
-  processed_dir: data/processed/politifact
+  raw_dir: datasets/politifact/raw/
+  processed_dir: datasets/politifact/processed
 
 fields:
   id_col: id
