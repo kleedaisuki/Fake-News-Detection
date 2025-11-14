@@ -13,11 +13,20 @@ paths:
   raw_dir: datasets/politifact/raw/
   processed_dir: datasets/politifact/processed
 
+splits:
+  train:
+    - HF.jsonl
+    - HR.jsonl
+    - MF.jsonl
+    - MR.jsonl
+  validation: []
+  test: []
+
 fields:
-  id_col: id
-  text_col: content            # 原始字段名可能为 content/text
-  label_col: label             # {0: fake, 1: real} 或 {fake, real}
-  timestamp_col: publish_time  # 若无则置 null
+  id: id
+  text: content
+  label: label             # {0: fake, 1: real} 或 {fake, real}
+  meta: ["publish_time"]
 
 preprocess:
   strip_html: true
