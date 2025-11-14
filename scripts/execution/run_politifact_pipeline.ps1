@@ -11,8 +11,10 @@
 #>
 
 param(
+    # 数据准备阶段只需要 data 配置
     [string[]]$PrepareConfigs = @("configs/data/politifact.yaml"),
-    [string[]]$TrainConfigs   = @("configs/train/politifact_5fold.yaml"),
+    # 训练阶段同时加载 data + train 配置，后者覆盖前者的训练相关字段
+    [string[]]$TrainConfigs   = @("configs/data/politifact.yaml", "configs/train/politifact_5fold.yaml"),
     [string[]]$Overrides      = @()
 )
 

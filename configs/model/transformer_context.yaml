@@ -1,29 +1,16 @@
-# 构建上下文编码器（实体上下文 ID 序列 → 序列表征 r' 与池化向量）
-# 与实体编码器同构；可选择共享嵌入表
-# 由 kan.utils.registry 构建：HUB['context_encoder']
+# ContextEncoder（实体上下文序列编码器）配置
+# 对齐论文：单层 Transformer，隐藏维/头数与文本/实体侧一致。
 
-name: context_encoder
-type: transformer_context_id
-seed: 42
+name: transformer_context_default
 
-embedding:
-  share_with_entity_encoder: true  # 若实现支持，则与实体编码器权重共享
-  vocab_size: null                 # 未共享时需提供；共享时忽略
-  embedding_dim: 100               # 与 D 对齐
-  padding_idx: 0
-  pretrained_path: null
-  trainable: true
+hidden_size: 100
+num_layers: 1
+num_heads: 4
+ffn_dim: 2048
+dropout: 0.5
 
-encoder:
-  xformer_layers: 1
-  xformer_heads: 4
-  ffn_dim: 2048
-  dropout: 0.5
-  activation: gelu
+attn_dropout: 0.1
+activation: relu
 
-# 聚合（对 Lc、再对 E）
-pooling:
-  inner_pooling: mean        # Lc 聚合（r' 的内部）
-  entity_pooling: mean       # E 聚合（得到每样本 r 向量）
-
-return_raw_contexts: false
+max_seq_len: 64          # 每实体上下文截断长度
+layer_norm_eps: 1e-5

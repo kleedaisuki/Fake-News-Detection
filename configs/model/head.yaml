@@ -1,24 +1,18 @@
-# 预测头：接收 p（文本）、q（实体注意力输出）、r（上下文注意力输出）
-# 由 kan.utils.registry 构建：HUB['head']
+# 分类头（Head）配置
 
-name: head
-type: concat_classifier_head
+name: kan_classification_head
+
+# hidden_size_p/q/r 一般等于各 encoder 输出维度
+hidden_size_p: 100
+hidden_size_q: 100
+hidden_size_r: 100
+
+dropout: 0.5
+
 num_labels: 2
-problem_type: single_label_classification   # 真假二分类
+problem_type: single_label_classification  # or "binary" 也可以再封装
 
-use_p: true
-use_q: true
-use_r: true
-fusion: concat              # 与论文一致：拼接 [p; q; r] → 全连接 → softmax
+use_q: true   # 是否使用实体通路
+use_r: true   # 是否使用上下文通路
 
-# 若三路维度一致（D=100），可不设投影；需要时可解锁 proj_dim
-proj_dim: null              # 例如设为 100/128/256 以做线性投影
-hidden_sizes: []            # 空列表 → 直接线性层（论文描述为“一层全连接”）
-activation: gelu
-layernorm: false
-bias: true
-
-# 正则与稳定性
-dropout: 0.5                # 头部丢弃（与主干一致，经验上更稳）
-label_smoothing: 0.0
-class_weights: null
+l2_reg: 0.0   # 额外 L2 正则（可选，通常由 optimizer.weight_decay 控制）

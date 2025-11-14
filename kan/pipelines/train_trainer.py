@@ -130,6 +130,96 @@ def _apply_overrides(cfg: MutableMapping[str, Any], overrides: Sequence[str]) ->
         cur[parts[-1]] = val_conv
 
 
+def _materialize_model_configs(
+    cfg: MutableMapping[str, Any],
+    root: Optional[Path] = None,
+) -> None:
+    """
+    将 cfg["model"] 中的若干子配置（可以是文件路径或 dict）展开到顶层：
+      - model.text_encoder -> cfg["text_encoder"]
+      - model.entity_encoder -> cfg["entity_encoder"]
+      - model.context_encoder -> cfg["context_encoder"]
+      - model.head -> cfg["head"]
+      - model.fusion.ne -> cfg["ne"]
+      - model.fusion.ne2c -> cfg["ne2c"]
+    """
+    model_cfg = cfg.get("model")
+    if not isinstance(model_cfg, Mapping):
+        return
+
+    root = root or Path.cwd()
+
+    def _load_maybe_path(val: Any) -> Optional[Mapping[str, Any]]:
+        if isinstance(val, Mapping):
+            return val
+        if isinstance(val, str):
+            p = (root / val).expanduser()
+            if not p.exists():
+                LOGGER.warning("模型子配置文件不存在：%s", p)
+                return None
+            return _read_yaml(p)
+        return None
+
+    # 顶层几个 encoder/head
+    for key in ("text_encoder", "entity_encoder", "context_encoder", "head"):
+        if key in model_cfg:
+            sub = _load_maybe_path(model_cfg[key])
+            if sub is not None:
+                cfg[key] = sub
+
+    # fusion.ne / fusion.ne2c
+    fusion = model_cfg.get("fusion")
+    if isinstance(fusion, Mapping):
+        for key, target in (("ne", "ne"), ("ne2c", "ne2c")):
+            if key in fusion:
+                sub = _load_maybe_path(fusion[key])
+                if sub is not None:
+                    cfg[target] = sub
+
+
+def _resolve_data_cfg(cfg: Mapping[str, Any], root: Optional[Path] = None) -> Dict[str, Any]:
+    """
+    @brief 解析训练配置中的 data 段，返回统一的数据集配置。
+    @brief Resolve `data` section in training config into a unified dataset config.
+
+    约定（Conventions）：
+      - 若 cfg["data"] 不存在，则认为整个 cfg 本身就是数据集配置（兼容旧用法）。
+      - 若 cfg["data"]["config"] 存在且为 YAML 路径，则先加载该 YAML 作为 base，
+        再将 data 段中除 "config" 以外的字段深度覆盖到 base 上。
+
+    @param cfg [zh] 合并后的全局配置（训练入口 YAML 之和）
+               [en] Global merged config from all YAMLs.
+    @param root [zh] 解析相对路径时的根目录，一般为仓库根或当前工作目录。
+                [en] Root directory used for resolving relative paths (defaults to CWD).
+
+    @return [zh] 统一后的数据集配置字典，可直接传给 loader_from_config。
+            [en] Normalized dataset config dict, ready for loader_from_config.
+    """
+    root = root or Path.cwd()
+
+    data_section = cfg.get("data")
+    # 情况 1：没有 data 段，直接把整份 cfg 当成数据配置
+    if not isinstance(data_section, Mapping):
+        return dict(cfg)
+
+    data_section = dict(data_section)  # 浅拷贝，避免修改原 cfg
+
+    # 情况 2：data.config 指向外部 YAML（推荐用法）
+    config_path = data_section.pop("config", None)
+    if config_path:
+        p = (root / str(config_path)).expanduser()
+        if not p.exists():
+            raise FileNotFoundError(f"data.config 指向的 YAML 不存在：{p}")
+        base_cfg = _read_yaml(p)
+    else:
+        # 若没有 config 字段，就把 data 本身当作数据配置的起点
+        base_cfg = {}
+
+    # 把 data 段里除 config 外的字段覆盖到 base_cfg
+    _deep_update(base_cfg, data_section)
+    return base_cfg
+
+
 # ------------------------------
 # 数据加载与批处理（依赖 kan.data.*）
 # ------------------------------
@@ -199,13 +289,16 @@ class KANForNewsClassification(nn.Module):
         self.use_q = use_q
         self.use_r = use_r
         self.num_labels = num_labels
-        
+
     @staticmethod
     def _to_device(obj: Any, device: torch.device):
         if torch.is_tensor(obj):
             return obj.to(device)
         if isinstance(obj, dict):
-            return {k: KANForNewsClassification._to_device(v, device) for k, v in obj.items()}
+            return {
+                k: KANForNewsClassification._to_device(v, device)
+                for k, v in obj.items()
+            }
         if isinstance(obj, (list, tuple)):
             t = type(obj)
             return t(KANForNewsClassification._to_device(v, device) for v in obj)
@@ -352,12 +445,18 @@ def build_components(
     except Exception as e:
         LOGGER.warning("Registry 构建失败，尝试直接导入模块：%s", e)
         # Fallback：直接 import 预设构造函数（要求代码已实现）
-        from kan.modules.text_encoder import build_text_encoder
+        from kan.modules.text_encoder import build_text_encoder, TextEncoderConfig
         from kan.modules.entity_encoder import build_entity_encoder
         from kan.modules.context_encoder import build_context_encoder
         from kan.modules.head import build_head
 
-        te = build_text_encoder(cfg.get("text_encoder", {}))
+        te_cfg = cfg.get("text_encoder", {})
+        if isinstance(te_cfg, dict):
+            te_cfg = TextEncoderConfig(**te_cfg)
+        elif not isinstance(te_cfg, TextEncoderConfig):
+            raise TypeError(f"Unexpected text_encoder config type: {type(te_cfg)!r}")
+        te = build_text_encoder(te_cfg)
+
         ee = (
             build_entity_encoder(cfg.get("entity_encoder", {}))
             if cfg.get("entity_encoder")
@@ -438,6 +537,8 @@ def run_from_configs(
         assert cp.exists(), f"配置文件不存在：{cp}"
         _deep_update(cfg, _read_yaml(cp))
     _apply_overrides(cfg, list(overrides))
+    # 在这里展开 model.* 的子配置
+    _materialize_model_configs(cfg, root=Path("."))
 
     # 2) 输出目录与日志
     now = time.strftime("%Y%m%d-%H%M%S")
@@ -479,10 +580,12 @@ def run_from_configs(
         from kan.data.loaders import loader_from_config, Dataset as NewsDataset  # type: ignore
         from kan.data.batcher import Batcher, BatcherConfig, TextConfig, EntityConfig, ContextConfig  # type: ignore
 
-        data_cfg = cfg.get("data") or cfg  # 兼容：直接把 data 字段铺在根部
+        data_cfg = _resolve_data_cfg(cfg, root=Path("."))
         loader = loader_from_config(data_cfg)
-        # 预加载训练集以便构建词表
-        train_records = loader.load_split(data_cfg.get("train_split", "train"))
+        # train_split：训练阶段的逻辑 split 名，默认 "train"
+        train_split = data_cfg.get("train_split", "train")
+        LOGGER.info("使用 train_split=%s", train_split)
+        train_records = loader.load_split(train_split)
         # 词表/批处理器（明确 CPU 上构建）
         batcher = Batcher(
             BatcherConfig(

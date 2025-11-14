@@ -13,14 +13,10 @@ paths:
   raw_dir: datasets/politifact/raw/
   processed_dir: datasets/politifact/processed
 
+# ↓ 这里是原始数据入口（用于 prepare_data 阶段）
 splits:
-  train:
-    - HF.jsonl
-    - HR.jsonl
-    - MF.jsonl
-    - MR.jsonl
-  validation: []
-  test: []
+  train: train.jsonl
+format: jsonl
 
 fields:
   id: id
@@ -74,7 +70,7 @@ kg:
   backoff: 0.5
   cache:
     dir: .cache/kan/kg/politifact
-    overwrite: false
+  overwrite: false
   rate_limit:
     rps: 2
     burst: 4

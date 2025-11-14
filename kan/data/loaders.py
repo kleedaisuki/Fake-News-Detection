@@ -386,6 +386,16 @@ class CSVLoader(BaseLoader):
                 recs.append(r)
         LOGGER.info("Loaded %d records from %s", len(recs), file.name)
         return recs
+    
+    def has_split(self, split: str) -> bool:
+        """
+        @brief 判断是否配置了指定 split。/ Check whether a given split is configured.
+        @param split @zh split 名称，如 "train"/"validation"/"test"。@en Split name.
+        @return @zh 若在 cfg.splits 中存在该 split 返回 True，否则 False。@en True if split exists in cfg.splits.
+        @note @zh 与 pipelines 中的使用方式保持一致，不改变现有行为。@en
+              Backward-compatible helper used by training/prepare pipelines.
+        """
+        return bool(self.cfg.splits) and split in self.cfg.splits
 
 
 @_DATASET_REG.register("jsonl", alias=["json", "JSONL", "JSON"])  # type: ignore[attr-defined]
@@ -441,6 +451,16 @@ class JSONLinesLoader(BaseLoader):
                 recs.append(r)
         LOGGER.info("Loaded %d records from %s", len(recs), file.name)
         return recs
+    
+    def has_split(self, split: str) -> bool:
+        """
+        @brief 判断是否配置了指定 split。/ Check whether a given split is configured.
+        @param split @zh split 名称，如 "train"/"validation"/"test"。@en Split name.
+        @return @zh 若在 cfg.splits 中存在该 split 返回 True，否则 False。@en True if split exists in cfg.splits.
+        @note @zh 与 pipelines 中的使用方式保持一致，不改变现有行为。@en
+              Backward-compatible helper used by training/prepare pipelines.
+        """
+        return bool(self.cfg.splits) and split in self.cfg.splits
 
 
 # -----------------------------------------------------------------------------

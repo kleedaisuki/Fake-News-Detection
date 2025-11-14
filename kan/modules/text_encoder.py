@@ -43,9 +43,8 @@ Transformer/RNN 等实现，提供统一契约：**输入批文本或已分词�
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Literal, Optional, Dict, Any
+from typing import List, Literal, Optional, Dict
 import logging
-import os
 
 try:
     import torch
@@ -67,11 +66,18 @@ except Exception as e:  # pragma: no cover
         "Transformers 未安装或导入失败，请先安装 transformers。/ transformers is missing."
     ) from e
 
+from kan.utils.registry import HUB
+
 # -----------------------------------------------------------------------------
 # Logging
 # -----------------------------------------------------------------------------
 # 命名空间式的 logger，便于在全局 logging 配置中精确控制该模块的日志级别
 logger = logging.getLogger("kan.modules.text_encoder")
+
+# -----------------------------------------------------------------------------
+# Registry
+# -----------------------------------------------------------------------------
+TEXT = HUB.get_or_create("text_encoder")
 
 
 # -----------------------------------------------------------------------------
@@ -330,6 +336,30 @@ def build_text_encoder(
     enc = HFTextEncoder.from_pretrained(cfg, trust_remote_code=trust_remote_code)
     logger.info("Text encoder built: %s", cfg)
     return enc
+
+
+@TEXT.register("hf_text", alias=["hf", "transformer"])
+def build_hf_text_encoder(
+    model_name_or_path: str = "bert-base-uncased",
+    max_length: int = 512,
+    pooling: str = "cls",
+    trainable: bool = False,
+    use_fast_tokenizer: bool = True,
+    pad_to_max_length: bool = True,
+) -> HFTextEncoder:
+    """\
+    @brief 注册到 Registry 的 HF 文本编码器工厂。
+           HF-based text encoder factory registered to 'text_encoder' registry.
+    """
+    cfg = TextEncoderConfig(
+        model_name_or_path=model_name_or_path,
+        max_length=max_length,
+        pooling=pooling,  # type: ignore[arg-type]
+        trainable=trainable,
+        use_fast_tokenizer=use_fast_tokenizer,
+        pad_to_max_length=pad_to_max_length,
+    )
+    return build_text_encoder(cfg)
 
 
 # -----------------------------------------------------------------------------
